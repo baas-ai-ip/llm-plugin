@@ -2,7 +2,7 @@
 """Punto de entrada de los scripts del plugin `baas` (Python 3.10+, solo biblioteca estándar).
 
 Uso: python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" <orden> ...
-Órdenes: set-key, init, status, desktop-config, run-script, sync, inspect, publish y export.
+Órdenes: set-key, init, status, desktop-config, run-script, sync, inspect, publish, export y setup.
 """
 
 import os

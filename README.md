@@ -69,6 +69,8 @@ La pide sin mostrarla; también acepta `… | python3 …/baas.py set-key --stdi
 | `~/baas-ai-ip/bin/baas_desktop_credentials.py` | Solo con Claude Desktop en modo gateway (`desktop-config`): da a Desktop la API key de Anthropic y la cabecera `X-Baas-Api-Key` leyendo `.env` | No |
 | `<proyecto>/.claude/settings.local.json` (0600) | `ANTHROPIC_BASE_URL` (proxy de la organización) y `ANTHROPIC_CUSTOM_HEADERS` con `X-Baas-Api-Key`. Se conservan tus otros ajustes | **No**: el plugin lo añade a `.gitignore` y se niega a escribir si ya está versionado |
 | `<proyecto>/.claude/baas.local.json` | Organización y URLs (sin secretos) | **No** (`.gitignore`) |
+| `<proyecto>/.agents/mcp_config.json` (0600) | Solo con `setup antigravity`: el servidor `baas` con la API key **en claro** en `Authorization` ([Antigravity](#antigravity-extensión-de-vs-code-y-cli-agy)) | **No**: `.gitignore` y se niega si está versionado |
+| `<proyecto>/.agents/rules/baas.md` | Solo con `setup antigravity`: la regla equivalente a `baas-brain` (sin secretos) | Puede versionarse |
 | `~/.claude.json` (ámbito *local* del proyecto) | Servidor MCP `baas` (URL y `headersHelper`, **sin** la clave) | No |
 | `~/.claude/skills/<organización>/` (0700) | *(H5)* El plugin de usuario con las skills sincronizadas: `.claude-plugin/plugin.json`, `.baas-managed` y `skills/<skill>/…` | No: está en tu `HOME` |
 | `~/.claude/settings.json` | *(H5)* Solo `enabledPlugins["<organización>@skills-dir"] = false` (el plugin queda apagado a nivel de usuario). Se conserva el resto del fichero y se escribe de forma atómica | No |
@@ -127,6 +129,16 @@ Límite aceptado: un script ya ejecutado no se puede «revocar» (riesgo S6); la
 ## Codex (OpenAI)
 
 El plugin `baas` es de Claude Code, pero **Codex CLI** también puede pasar por el proxy de OpenAI de tu organización con un perfil de usuario y `env_http_headers` (la clave de BaaS-AI-IP solo en el entorno de Codex, nunca en un fichero): ver [docs/codex.md](docs/codex.md).
+
+## Antigravity (extensión de VS Code y CLI `agy`)
+
+**Solo cerebro, sin protección.** Antigravity se conecta al MCP de tu organización (skills y conocimiento) con una orden, pero **no pasa por el proxy ni por AI-IP**: sus conversaciones van a Google sin anonimizar. La extensión y la CLI comparten `mcp_config.json`:
+
+```bash
+python3 "<ruta del plugin>/scripts/baas.py" setup antigravity --project <proyecto> [--org <slug>] [--print]
+```
+
+Escribe el servidor `baas` en `<proyecto>/.agents/mcp_config.json` (no en el global) y la regla `.agents/rules/baas.md` (el equivalente de `baas-brain`). **La clave queda en claro en ese fichero** (Antigravity no admite variables ni un comando para el secreto): el plugin lo deja en 0600, lo añade al `.gitignore` y se niega a escribir si está versionado. Pasos, lo que no cubre y la lista de comprobación manual en [docs/antigravity.md](docs/antigravity.md).
 
 ## Claude Desktop (pestaña Code)
 

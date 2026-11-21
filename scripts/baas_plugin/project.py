@@ -47,16 +47,18 @@ def resolve_project_dir(explicit: str | None, *, cwd: Path) -> Path:
     return cwd.resolve()
 
 
-def check_not_tracked(project: Path) -> None:
+def check_not_tracked(
+    project: Path, entries: Iterable[str] = GITIGNORE_ENTRIES, *, command: str = "/baas-init"
+) -> None:
     """Un `.gitignore` no protege un fichero ya versionado: en ese caso no escribimos la clave."""
     if not project.is_dir():
         return
-    for rel in GITIGNORE_ENTRIES:
+    for rel in entries:
         res = _git(project, "ls-files", "--error-unmatch", "--", rel)
         if res is not None and res.returncode == 0:
             raise ProjectSafetyError(
                 f"`{rel}` está versionado en git; escribir en él podría publicar tu API key.",
-                hint=f"Sácalo del índice con `git rm --cached {rel}` (y haz commit) antes de lanzar /baas-init.",
+                hint=f"Sácalo del índice con `git rm --cached {rel}` (y haz commit) antes de lanzar {command}.",
             )
 
 
