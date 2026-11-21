@@ -309,7 +309,18 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual((ns.admin_email, ns.orgadmin_email), ("admin@baas.test", "orgadmin@demo.test"))
         self.assertEqual(
             ns.only,
-            ["observacion", "interruptor", "eliminar", "originales", "huerfanos", "uso", "acl", "limite", "consumo"],
+            [
+                "observacion",
+                "interruptor",
+                "eliminar",
+                "originales",
+                "huerfanos",
+                "uso",
+                "acl",
+                "limite",
+                "ner",
+                "consumo",
+            ],
         )
         self.assertEqual((ns.auth_fail_burst, ns.auth_fail_per_minute), (30, 10.0), "los valores del contrato §7.5")
         self.assertEqual((ns.anon_org, ns.anon_email), ("privada", "analista@privada.test"))
@@ -328,7 +339,8 @@ class ParseArgsTest(unittest.TestCase):
 
     def test_consumo_group_is_registered_in_groups_and_only_help(self) -> None:
         self.assertIn("consumo", e2e_h4.GROUPS)
-        self.assertEqual(e2e_h4.GROUPS[-1], "consumo", "va tras «limite»: el 15 es del grupo «ner»")
+        groups = e2e_h4.GROUPS
+        self.assertEqual(groups.index("consumo"), groups.index("ner") + 1, "los pasos 16.x van tras los 15.x de «ner»")
         self.assertIn("consumo", e2e_h4.parse_args([]).only, "entra en el --only por defecto")
         self.assertEqual(e2e_h4.parse_args(["--only", "consumo"]).only, ["consumo"])
         out = io.StringIO()
@@ -1282,10 +1294,10 @@ class MissingInspectorTest(unittest.TestCase):
 
 # La pila simulada no simula la observabilidad de uso (Fase 4): el grupo «uso» se prueba contra la pila real y aquí
 # solo sus utilidades (tests/test_e2e_uso.py); lo mismo con «acl»
-# (tests/test_e2e_acl.py) y con «consumo» (tests/test_e2e_consumo.py; la pila simulada sirve el informe de turnos por
-# modo de 16.0, 16.1 y 16.4, no el disco de 16.2 ni el CSV de 16.3). Sin `--only`, el recorrido es el de los grupos
-# de H4.
-H4_GROUPS = ",".join(g for g in e2e_h4.GROUPS if g not in ("uso", "acl", "consumo"))
+# (tests/test_e2e_acl.py), con «consumo» (tests/test_e2e_consumo.py; la pila simulada sirve el informe de turnos por
+# modo de 16.0, 16.1 y 16.4, no el disco de 16.2 ni el CSV de 16.3) y con «ner» (tests/test_e2e_ner.py, sin NER en la
+# pila simulada). Sin `--only`, el recorrido es el de los grupos de H4.
+H4_GROUPS = ",".join(g for g in e2e_h4.GROUPS if g not in ("uso", "acl", "consumo", "ner"))
 
 
 def run_e2e(

@@ -8,8 +8,8 @@ distribuyen con el plugin.
 - [Hito H4 (observación y eliminación de organizaciones)](#hito-h4-observación-y-eliminación-de-organizaciones):
   `dev/e2e_h4.py`, el anonimizador apagado, el interruptor, eliminar una organización, la prueba canario de H4-02
   (los originales no llegan al disco de Redis), qué pasa con los usuarios que se quedan sin ninguna, el límite de
-  claves no válidas por IP a través de Caddy (H4-13) y el consumo de la plataforma por organización (Fase 2, grupo
-  `consumo`).
+  claves no válidas por IP a través de Caddy (H4-13), el consumo de la plataforma por organización (Fase 2, grupo
+  `consumo`) y, también en la Fase 2, el NER (L2, grupo `ner`, pasos 15.x).
 - [`/baas-init` guiado](#baas-init-guiado-conexión-por-aprobación-en-el-navegador): `tests/test_e2e_connect.py`, la
   conexión por aprobación en el navegador sobre la pila simulada.
 - [Mediciones de H4](#mediciones-de-h4): `dev/measure_h4.py` y `dev/measure_frozen_redis.py`.
@@ -17,7 +17,7 @@ distribuyen con el plugin.
 
 ## En la CI
 
-`e2e_h4.py` (todos sus grupos por omisión, `consumo` incluido) y `e9_roles.py` corren en GitHub Actions con el workflow `e2e` del repositorio
+`e2e_h4.py` (todos sus grupos por omisión, `consumo` incluido; el grupo `ner` necesita la pila con el servicio `ner`) y `e9_roles.py` corren en GitHub Actions con el workflow `e2e` del repositorio
 `deploy`: levanta la pila con el proveedor falso, descarga `main` de cada repositorio (o la rama que se pida con
 `plugin_ref`, `webapp_ref`, `proxy_ref` o `mcp_ref`) y sube un resumen y el diagnóstico. Se lanza a mano, de
 momento (`gh workflow run e2e.yml -R baas-ai-ip/deploy`). Cómo funciona, qué necesita y cómo repetirlo en local:
@@ -26,6 +26,11 @@ momento (`gh workflow run e2e.yml -R baas-ai-ip/deploy`). Cómo funciona, qué n
 Qué implica para estos scripts: se ejecutan con `--inspect docker` (en local, con podman) y con `--json` (el informe
 de pasos que lee el resumen del job); `e2e_h4.py` se ejecuta tal cual, sin cambios para la CI. Las medidas
 (`measure_*.py`) no corren en la CI: en un runner compartido los tiempos no son fiables.
+
+Desde la Fase 2, los grupos por omisión de `e2e_h4.py` incluyen `ner` (pasos 15.x): la pila de `deploy` de la CI tiene
+que llevar el servicio `ner` y `BAAS_NER_URL` en el proxy, o el grupo falla. 15.5 para y vuelve a arrancar `ner` y 15.4
+reinicia el proxy (unos 50 s entre los dos). Orden previsto de fusión: `llm-plugin` va el último, cuando `deploy` ya
+tiene el servicio.
 
 ## Hito H2 (épica E4)
 
@@ -258,6 +263,10 @@ Pendiente de la integración (C2). Contra la pila simulada, la ejecución comple
 > El grupo `limite` (pasos 14.x, H4-13: claves no válidas frenadas por IP en el proxy y el MCP) se añadió el
 > 2026-11-19 y se ejecutó contra una pila real (`h413-int`) con las ramas `feat/h4-13-limite-claves` del proxy y del MCP.
 >
+> El grupo `ner` (pasos 15.x, Fase 2, L2: el NER sustituye nombres, empresas y direcciones) se añadió el 2026-11-20 y se
+> ejecutó contra una pila real (`f2ner`) construida con las ramas sin fusionar de todos los componentes. **Necesita una
+> pila con el servicio `ner`** (`BAAS_NER_URL` en el proxy); contra una pila de la Fase 1, `--only` sin `ner`.
+>
 > El grupo `consumo` (pasos 16.0 a 16.8, Fase 2: consumo de la plataforma por organización) se añadió el 2026-11-21 y se
 > ejecutó contra una pila real (`consumo-int`) con las ramas `feat/f2-consumo-*` de `webapp` (backend y frontend),
 > `mcp-server` y `deploy` y `main` del proxy. Su contrato es `knowledge/02-arquitectura/contrato-fase-2-consumo.md` (§9).
@@ -300,9 +309,9 @@ claves deterministas del contrato §8 de `observador@observacion.test`, `admin@b
 | `--orgadmin-email` | `orgadmin@demo.test` | ORG_ADMIN de otra organización: debe recibir `404` al cambiar el interruptor y es el primer miembro de la organización que se elimina |
 | `--bypass-org` · `--bypass-email` | `demo` · `analista@demo.test` | Organización con AI-IP apagado |
 | `--anon-org` · `--anon-email` | `privada` · `analista@privada.test` | Organización con AI-IP y anonimizador **encendidos** (la de H3) y su usuario: el tercer modo del grupo `originales` |
-| `--only` | `observacion,interruptor,eliminar,originales,huerfanos,uso,acl,limite,consumo` | Partes que se ejecutan (separadas por comas). `huerfanos` crea sus propias organizaciones y usuarios (`huerf-<ejecución>-…`) y los activa por la API: **necesita `BAAS_DEV_SKIP_TOTP=1`**. `uso` (Fase 4) necesita la pila con la observabilidad de uso y `env/dev/mcp-server.env` de `deploy` (ventana de 5 s, foto de disco cada 30 s). `acl` (H4-05) necesita la pila con la ACL de Redis de `deploy` y `--inspect`. `limite` (H4-13) necesita el proxy y el MCP con el límite de claves no válidas y el contenedor `fake-upstream` (`--fake-upstream`). `consumo` (Fase 2) necesita la webapp con el informe de consumo y los informes globales (T2, T3 y T7: sin `period` en `GET /platform/usage`, 16.0 falla y los demás 16.x quedan `SALTADO`), el MCP con el recuento de skills y áreas en la foto (T4) y la foto de disco cada 30 s; **no** necesita `--inspect`. 16.8 se salta sin NER salvo que se declare con `--ner` (ver más abajo) |
+| `--only` | `observacion,interruptor,eliminar,originales,huerfanos,uso,acl,limite,ner,consumo` | Partes que se ejecutan (separadas por comas). `huerfanos` crea sus propias organizaciones y usuarios (`huerf-<ejecución>-…`) y los activa por la API: **necesita `BAAS_DEV_SKIP_TOTP=1`**. `uso` (Fase 4) necesita la pila con la observabilidad de uso y `env/dev/mcp-server.env` de `deploy` (ventana de 5 s, foto de disco cada 30 s). `acl` (H4-05) necesita la pila con la ACL de Redis de `deploy` y `--inspect`. `limite` (H4-13) necesita el proxy y el MCP con el límite de claves no válidas y el contenedor `fake-upstream` (`--fake-upstream`). `consumo` (Fase 2) necesita la webapp con el informe de consumo y los informes globales (T2, T3 y T7: sin `period` en `GET /platform/usage`, 16.0 falla y los demás 16.x quedan `SALTADO`), el MCP con el recuento de skills y áreas en la foto (T4) y la foto de disco cada 30 s; **no** necesita `--inspect`. 16.8 se salta sin NER salvo que se declare con `--ner` (ver más abajo). `ner` (Fase 2) necesita el servicio `ner` y la webapp con las API del NER; 15.4 y 15.5 necesitan `--inspect` (la 15.5 **para y vuelve a arrancar** `ner`: no la lances contra una pila que otros estén usando) |
 | `--apis` | `messages,chat,responses` | APIs que se prueban |
-| `--inspect` | `auto` | `podman`, `docker` o `auto` (el primero que vea el proyecto) para mirar el vault, las dos instancias de Redis (claves y disco) y la cuarentena del MCP, y para enviar las peticiones del grupo `limite` desde el contenedor `fake-upstream`; `none` omite esos pasos (9.1b, 9.8, todo el grupo `originales`, 12.4, 12.5, 12.7, 12.8 y 12.9 y todos los grupos `acl` y `limite`; el grupo `consumo` no mira dentro de los contenedores y se ejecuta igual), que no se registran (con `--only originales`, `uso`, `acl` o `limite` lo dice en una nota) |
+| `--inspect` | `auto` | `podman`, `docker` o `auto` (el primero que vea el proyecto) para mirar el vault, las dos instancias de Redis (claves y disco) y la cuarentena del MCP, y para enviar las peticiones del grupo `limite` desde el contenedor `fake-upstream`; `none` omite esos pasos (9.1b, 9.8, todo el grupo `originales`, 12.4, 12.5, 12.7, 12.8 y 12.9, todos los grupos `acl` y `limite`, y 15.4 y 15.5; el grupo `consumo` no mira dentro de los contenedores y se ejecuta igual), que no se registran (con `--only originales`, `uso`, `acl`, `limite` o `ner` lo dice en una nota) |
 | `--compose-project` | `$COMPOSE_PROJECT_NAME` o `baas-dev` | Proyecto de compose de la pila |
 | `--mcp-data-dir` | `/data` | `BAAS_DATA_DIR` del contenedor del MCP |
 | `--trace-timeout` | `30` | Segundos de espera de cada traza o de lo que se propaga (bloqueo, eliminación, cuarentena) |
@@ -316,6 +325,7 @@ claves deterministas del contrato §8 de `observador@observacion.test`, `admin@b
 | `--usage-window` | `5` | Grupo `uso`: `BAAS_USAGE_WINDOW_SECONDS` del MCP de la pila (5 en desarrollo); 12.3 espera una ventana más 1 s antes de dar el recuento por cerrado |
 | `--auth-fail-burst` | `30` | Grupo `limite`: `BAAS_AUTH_FAIL_BURST` del proxy y del MCP de la pila (claves desconocidas que un cliente puede probar seguidas antes del `429`) |
 | `--auth-fail-per-minute` | `10` | Grupo `limite`: `BAAS_AUTH_FAIL_PER_MINUTE` de la pila; con él se calcula cuántas fichas pudieron volver durante una ráfaga lenta y cuánto esperar a que se llene el cubo (`burst × 60 / ritmo` + 1 s, 181 s) si una ejecución anterior lo dejó a medias |
+| `--ner-timeout` | `150` | Grupo `ner` (15.5): espera a que `ner` vuelva a estar sano y a que el disyuntor del proxy (30 s abierto, `BAAS_NER_BREAKER_OPEN`) se cierre |
 | `--json <fichero>` | — | Informe en JSON (pasos, estado, duración, detalle, identificador de la ejecución) |
 
 ### 2. Qué comprueba
@@ -470,6 +480,25 @@ Messages, la última, se llevó una ficha que acababa de volver (recibe `401` y 
 otra justo después, que tiene que recibir el `429`. Mientras espera 14.1 se llena también el cubo del MCP, así que
 una segunda ejecución seguida espera una sola vez. Un reinicio del proxy o del MCP vacía sus cubos.
 
+**NER (L2)** (grupo `ner`, Fase 2; `dev/e2e_ner.py`; diseño `fase-2-ner-diseno.md` §8, criterios 1, 2, 4, 5, 8, 9 y 13;
+contrato §5.2, §6 y §7.2). Cada paso crea su organización (`ner-<ejecución>-<paso>`, con `--bypass-email` como miembro
+USER y el PLATFORM_ADMIN para los ajustes) y la elimina al terminar, así que no depende de la semilla. Una organización
+nueva nace con `ner_enabled: true`, `ner_mode: OBSERVE` y `ner_on_failure: DEGRADE`; los pasos que sustituyen la pasan a
+`ACTIVE`. Los nombres son inventados y el modelo los detecta de forma fiable («Ana Gómez», «Telefónica», «Valencia»;
+«Luis Fernández», «Sevilla»; «Pedro Martínez», «Repsol», «Bilbao»). **Cada caso lleva un sufijo propio** (`(caso …)`):
+el mismo primer mensaje del mismo usuario es una sola conversación, también entre Chat y Responses, y la caché del NER
+es de la organización; sin el sufijo, un caso reutilizaría el vault y la caché del anterior.
+
+| Paso | Qué comprueba |
+| :--- | :--- |
+| 15.1 | Organización nueva: NER encendido, `OBSERVE`, `DEGRADE`. `PUT /ner` con AI-IP apagado → `409 AI_IP_DISABLED`; sin motivo → `422 REASON_REQUIRED`; sin campos o con un valor fuera del contrato → `422`; un USER → `403`. Con motivo cambia solo lo que lleva (`mode`, `on_failure`) y la auditoría tiene `org.ner.changed` con motivo, antes y después. Con el anonimizador apagado → `409 ANONYMIZER_DISABLED` sin cambiar nada. Apagar y volver a encender el NER conserva el modo (criterio 13) |
+| 15.2 | Con `ACTIVE`, en las tres APIs, con y sin *streaming*: el proveedor recibe `[[PERSON_001]]`, `[[ORG_001]]` y `[[LOCATION_001]]` y ninguno de los tres valores; el cliente recibe los tres restaurados y ningún `[[`; el turno de la webapp lleva los mismos tokens en `request_sent`, `l2.status` `APPLIED` y un reemplazo de cada tipo (criterio 1) |
+| 15.3 | Segundo turno (con el historial y la respuesta del modelo tal como el cliente la reenvía), en cada API: `l2.analyzed_bytes` es solo el texto nuevo, `l2.cached_bytes` es todo lo ya visto (sistema y primer mensaje) y `unanalyzed_bytes` 0; lo que recibe el proveedor empieza por lo que recibió en el primer turno, mensaje a mensaje idéntico (se compara la serialización con el orden de claves de la petición: el proveedor falso guarda el cuerpo ya interpretado, no los bytes), sigue con la respuesta del modelo (el eco con sus tokens) y termina con lo nuevo, con tokens que continúan la numeración (`[[PERSON_002]]`, `[[LOCATION_002]]`) (criterio 2) |
+| 15.4 | *(necesita `--inspect`)* Tras dos turnos se borran de la efímera **solo** `baas:ner:<org_id>:*` (la caché del NER de la organización: antes tiene que haber claves) y `baas:conv:<id>:vault` (la copia caliente del vault de la conversación); **no** `FLUSHALL`: la efímera de la pila también guarda trazas aún sin consumir y las cachés de otras organizaciones, y el usuario `default` puede borrar con alcance. Después se **reinicia el proxy** (`stop` y `start` del contenedor, espera a `healthy` y a que Caddy lo sirva): el LRU en memoria del proxy (`BAAS_NER_CACHE_LOCAL_MB`) sobrevive al borrado de Redis y, sin reiniciarlo, lo visto saldría de él. Así lo visto ha perdido todas las capas. El tercer turno sale 200 en menos de 1,5 s (una llamada interactiva al NER con margen: si esperara al NER por lo visto, tardaría más), con el historial idéntico al del segundo, los tokens nuevos siguiendo la numeración (el vault se recargó de PostgreSQL), `l2.status` `APPLIED`, `cached_bytes` 0, `unanalyzed_bytes` los mensajes ya vistos (sin esperar al NER) y `analyzed_bytes` lo nuevo **más el texto de `system`** (Messages y Responses): no es un mensaje de la correlación, es «posiblemente nuevo» (diseño §5.3) y se espera en la misma llamada que lo nuevo; el NER vuelve a escribir su caché (criterio 4) |
+| 15.5 | *(necesita `--inspect`)* Se **para** el contenedor `ner` (`podman stop`). Con `DEGRADE`: el turno sale (el proveedor lo recibe), con `l2.status` `DEGRADED` y una causa válida y el turno `WARNING`; se repite hasta que el disyuntor se abre (`BREAKER_OPEN`, `BAAS_NER_BREAKER_FAILURES` = 5) y ese turno sale en menos de 1 s. Con `REJECT`: `503`, turno `BLOCKED` con `block_reason` `NER_UNAVAILABLE` y nada en `/_debug/requests`. **Siempre** (también si un paso falla) se vuelve a arrancar `ner`, se espera a que esté `healthy` y a que el proxy sustituya otra vez (con `REJECT`, un `200` es que el disyuntor se cerró y el NER respondió: unos 30 s), hasta `--ner-timeout`; si no vuelve, el paso falla (criterio 5) |
+| 15.6 | Observación, en las tres APIs y en tres casos, cada uno en su organización: NER apagado, NER encendido en `OBSERVE` y anonimizador apagado. El proveedor recibe el cuerpo idéntico al enviado y el cliente recibe lo mismo; el turno sale `OK` y `CLEAN` (sin cambio de estado), sin reemplazos ni coincidencias residuales, con `l2.status` `OBSERVED`, `l2.enabled` el de la organización y `l2.observed` 3; `observed_detections` trae, por orden de aparición, `PERSON` «Ana Gómez», `ORG` «Telefónica» y `LOCATION` «Valencia» con su `rule_id` y `count`; la vista del PLATFORM_ADMIN trae los mismos tipos **sin** `original_value` (criterio 8) |
+| 15.7 | Prueba en vivo (`POST /api/v1/orgs/{slug}/ai-ip/rules/test`): `ner.status` `OK`; las tres coincidencias con `layer: NER`, `score`, desplazamientos que apuntan al valor (puntos de código) y el token `REPLACED`; con «Telefónica» en la *allowlist* de la organización, esa coincidencia es `ALLOWLISTED` sin token, el texto anonimizado la conserva y las otras dos siguen `REPLACED`; al quitar el término, vuelve a `REPLACED` (criterio 9) |
+
 **Consumo de la plataforma** (grupo `consumo`, Fase 2; `dev/e2e_consumo.py`, contrato `contrato-fase-2-consumo.md` §9).
 Cada paso con datos crea su organización `consumo-<ejecución>-<paso>` con usuarios de la semilla como miembros y la
 elimina al terminar (sin desactivar a nadie); las de 16.5 a 16.8 pasan a zona `UTC` con
@@ -505,7 +534,8 @@ simulada (`dev/fake_h4_stack.py`) no simula este grupo: sus utilidades e inspect
 Los pasos que dependen de uno fallido quedan `SALTADO` (y cuentan como fallo). El bloqueo, la eliminación y la
 cuarentena se esperan hasta `--trace-timeout` s porque llegan a proxy y MCP por Pub/Sub; igual la revocación de claves y
 la pérdida de la membresía en la parte `huerfanos`. Una ejecución completa envía unas 45 peticiones al proveedor, más
-siete de la parte `huerfanos`, dos del grupo `limite` (14.2), 26 del grupo `consumo` y unas 530 del grupo `uso` (sobre todo 12.7 y 12.10) (`/_debug/requests` guarda las 50 últimas; el grupo `originales` no lo lee, y `uso` y `consumo` tampoco). Si una ejecución se corta entre 9.1 y 9.4,
+siete de la parte `huerfanos`, dos del grupo `limite` (14.2), 26 del grupo `consumo`, unas 530 del grupo `uso` (sobre todo 12.7 y 12.10) y unas
+31 del grupo `ner` (6 en 15.2, 6 en 15.3, 3 en 15.4, 7 en 15.5 —las que salen con el NER parado más la sonda final— y 9 en 15.6) (`/_debug/requests` guarda las 50 últimas; el grupo `originales` no lo lee, y `uso` y `consumo` tampoco). Si una ejecución se corta entre 9.1 y 9.4,
 queda una organización `e2e-<ejecución>` que se puede bloquear y eliminar a mano desde W3; si se corta la parte
 `huerfanos`, quedan organizaciones `huerf-<ejecución>-o1…o4` (se eliminan igual). Los inicios de sesión están limitados a
 20 por minuto y por IP: la parte `huerfanos` inicia sesión unas 15 veces y espera lo que diga `retry_after_seconds` si
@@ -522,6 +552,8 @@ recibe `429`.
 | Contra la pila real de H4 (`h4-int`): proxy real con el modo observación y el estado por conversación, webapp real con el interruptor, la eliminación, la vista del PLATFORM_ADMIN y el WebSocket, MCP real con la cuarentena, vault y Redis reales, **el proxy y la webapp con `BAAS_REDIS_EPHEMERAL_URL`** (grupo `originales` y 9.8 con las dos instancias) y el 11 (usuarios sin organización: la webapp, el proxy y el MCP con la revocación de claves) | **Ejecutado el 2026-11-18** en `h4-int` con H4-08, A′ y los huérfanos juntos: `e2e_h4.py` completo (los cinco grupos) y `e9_roles.py` |
 | Las peticiones del grupo `limite` desde un contenedor (`caddy_requests`) | **Ejecutado**: el motor falso corre de verdad el script de `python3 -c` contra un servidor local que hace de Caddy (`Host`, `X-Forwarded-For`, estado, `Retry-After`, cuerpo, conexión rechazada y entradas inseguras rechazadas antes de lanzar nada) |
 | El grupo `limite` contra la pila real (`h413-int`, 2026-11-19: proxy y MCP de `feat/h4-13-limite-claves`, `webapp` y `deploy` de `main`) | **Ejecutado**: 14.1 a 14.4 en verde a la primera, y otra vez justo después (con la espera de 181 s); el `WARN` del proxy y del MCP lleva la IP del contenedor, no las falsas. En la misma pila, `e2e_h4.py` completo (los siete grupos, 76 pasos) y `e9_roles.py` (12 pasos) en verde: ningún paso anterior recibe `429`. Repetido tras la revisión final (ramas rebasadas sobre `main`, con el episodio del `WARN` hasta que el cubo se llena y la tolerancia a una ráfaga lenta): otra vez 76 + 12 pasos en verde; un `--only limite` justo después encontró 4 fichas, esperó 181 s y pasó, y el proxy no repitió el `WARN` con esas 4 fichas, solo tras llenarse el cubo |
+| El grupo `ner` (utilidades puras e inspector) | **Ejecutado**: `tests/test_e2e_ner.py` (la CI), con un motor falso para `ephemeral_scan`, `ephemeral_delete`, `ner_control` y `ner_health` (patrones y claves seguros, lotes de 100, solo `stop` y `start`). La pila simulada de `dev/fake_h4_stack.py` **no** tiene NER: el grupo se prueba contra la pila real |
+| El grupo `ner` contra la pila real (`f2ner`, 2026-11-20: ramas sin fusionar de la webapp, el proxy con el servicio `ner`, `deploy` y el plugin) | **Ejecutado**: 15.1 a 15.7 en verde con `--only ner` |
 | El grupo `consumo` contra la pila real (`consumo-int`, 2026-11-21, reconstruida desde cero: `webapp` con las ramas `feat/f2-consumo-webapp-*` fusionadas, `mcp-server` y `deploy` de `feat/f2-consumo-*` y `main` del proxy) | **Ejecutado**: 16.0 a 16.8 en verde a la primera, con 16.8 **saltado** (la pila no tiene NER: ningún turno trae `verification.l2`); `e2e_h4.py` completo (todos los grupos, 90 pasos) y `e9_roles.py` (12 pasos) en verde. La rama con NER de 16.8 solo se ha ejecutado contra la pila simulada con `ner=True` |
 | El grupo `consumo` contra la pila real **tras fusionar `upstream/main` de la webapp y renumerar la migración a `0012`** (`consumo-fin`, 2026-11-21, reconstruida desde cero: `webapp` backend `969acd6` + frontend `7a13e89` fusionados, `mcp-server` `dac93c4`, `deploy` `d47425e` y `main` del proxy `223efbb`) | **Ejecutado**: la migración llegó a `0012`; `e2e_h4.py` completo (todos los grupos, 90 pasos) y `e9_roles.py` (12 pasos) en verde, con 16.8 **saltado** por defecto; y `--only consumo --ner` en esa pila (sin NER) → 16.8 **falla** con «se declaró el NER (--ner o BAAS_E2E_NER=1) y ningún turno trae verification.l2…» y los demás pasos del grupo en verde |
 | La interfaz web (W3, W7, W8, W11 en el navegador, en `es` y `en`) y «el PLATFORM_ADMIN no ve el contenido **por la UI**» | **Fuera de esta prueba.** La UI pinta lo que devuelve la API que se comprueba aquí (`content_available`); el recorrido en el navegador es de C2 |
