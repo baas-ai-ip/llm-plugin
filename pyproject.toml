@@ -41,7 +41,10 @@ ignore = [
 "tests/test_e2e_h4.py" = ["PT009", "PT027"]
 "tests/test_e2e_uso.py" = ["PT009", "PT027"]
 "tests/test_e2e_acl.py" = ["PT009", "PT027"]
+"tests/test_e2e_catalogo.py" = ["PT009", "PT027"]
 "dev/**" = ["S603", "S607", "T201"]
+# Mensajes de los pasos en una sola cadena larga (se leen en la salida del e2e); el token es el de desarrollo, no un secreto
+"dev/e2e_catalogo.py" = ["E501", "S105"]
 "tools/**" = ["T201"]
 
 [tool.pytest.ini_options]

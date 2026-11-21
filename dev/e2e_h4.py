@@ -40,6 +40,12 @@ Por HTTP directo (sin Claude Code), con las claves deterministas del contrato §
         distinto, reciben `401` y la 31.ª `429` con `Retry-After` en el proxy (`baas_auth_rate_limited`) y en el MCP
         (`RATE_LIMITED`); en una ráfaga lenta, el `429` puede llegar tras las fichas que volvieron mientras duraba. Una
         clave ya válida pasa desde la IP frenada; desde el equipo, una desconocida sigue en `401`.
+  13.   (pasos 13.0–13.8) Catálogo de skills y conocimiento (grupo «catalogo», `dev/e2e_catalogo.py`): la API de
+        administración de la webapp (`/api/v1/orgs/<org>/catalog/…`) lista y detalla skills y conocimiento, solo para
+        ORG_ADMIN y PLATFORM_ADMIN; cambiar roles y desactivar una skill cambia quién lee por el MCP y qué retira el
+        `sync` del plugin; `409` en edición concurrente; `/internal/*` del MCP no sale por Caddy; ninguna respuesta
+        lleva cuerpos de ficheros. Cada paso crea y elimina su organización (`cat-<ejecución>-…`). No mira dentro de
+        los contenedores. (La numeración 13 la fija el contrato del catálogo; el grupo «acl» usa también 13.1–13.5.)
 
 Uso (pila de `deploy` con el proveedor falso: `scripts/dev-up.sh --fake-upstream`):
 
@@ -81,6 +87,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import e2e_acl
+import e2e_catalogo
 import e2e_h3 as h3
 import e2e_uso
 from e2e_h2 import DEV_PASSWORD, DEV_TOTP_SECRET, Http, Runner, StepError, check, dev_api_key
@@ -91,7 +98,7 @@ from baas_plugin.mcp_client import McpClient
 DNI, EMAIL, IBAN, VALUES = h3.DNI, h3.EMAIL, h3.IBAN, h3.VALUES
 SENSITIVE_TEXT, TOKENS = h3.SENSITIVE_TEXT, h3.TOKENS
 APIS, API_NAMES = h3.APIS, h3.API_NAMES
-GROUPS = ("observacion", "interruptor", "eliminar", "originales", "huerfanos", "uso", "acl", "limite")
+GROUPS = ("observacion", "interruptor", "eliminar", "originales", "huerfanos", "uso", "catalogo", "acl", "limite")
 META_ORG = "baas-ai-ip"
 FORBIDDEN_TURN_KEYS = ("request_sent", "response_received", "request_original", "response_returned")
 VALUE_KEYS = ("original_value", "value")
@@ -1282,6 +1289,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Grupo limite: BAAS_AUTH_FAIL_PER_MINUTE de la pila (10); con él se calcula cuántas fichas "
                         "pudieron volver durante una ráfaga lenta y cuánto esperar a que se llene el cubo si una "
                         "ejecución anterior lo dejó a medias")  # fmt: skip
+    p.add_argument("--internal-token", default=e2e_catalogo.INTERNAL_TOKEN,
+                   help="Grupo catalogo (13.6): BAAS_INTERNAL_TOKEN de la pila (el de desarrollo); se envía a "
+                        "/internal/* por Caddy para comprobar que lo bloquea Caddy y no el token")  # fmt: skip
     p.add_argument("--json", type=Path, help="Escribe aquí el informe en JSON")
     ns = p.parse_args(argv)
     if ns.auth_fail_burst < 1 or not ns.auth_fail_per_minute > 0:
@@ -3226,6 +3236,8 @@ class E2EH4:
         )
         uso = e2e_uso.UsoGroup(self) if "uso" in groups else None
         logins += uso.logins() if uso else []
+        catalogo = e2e_catalogo.CatalogoGroup(self) if "catalogo" in groups else None
+        logins += catalogo.logins() if catalogo else []
         step(s3, lambda: self.login(*logins), needs=[s0])
         cases = [(api, stream) for api in APIS for stream in (False, True)]
         if groups & {"observacion", "interruptor", "originales"}:
@@ -3337,6 +3349,8 @@ class E2EH4:
                  self.orph_cleanup, needs=[react_a, visible, react_g, keep])  # fmt: skip
         if uso is not None:
             uso.register(runner, [s0, s1, s3])
+        if catalogo is not None:
+            catalogo.register(runner, [s0, s3])
         if "acl" in groups and self.inspector is not None:
             e2e_acl.register(runner, self, [s0])
         if "limite" in groups and self.inspector is not None:

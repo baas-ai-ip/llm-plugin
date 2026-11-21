@@ -308,7 +308,8 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual((ns.org, ns.email), ("observacion", "observador@observacion.test"))
         self.assertEqual((ns.admin_email, ns.orgadmin_email), ("admin@baas.test", "orgadmin@demo.test"))
         self.assertEqual(
-            ns.only, ["observacion", "interruptor", "eliminar", "originales", "huerfanos", "uso", "acl", "limite"]
+            ns.only,
+            ["observacion", "interruptor", "eliminar", "originales", "huerfanos", "uso", "catalogo", "acl", "limite"],
         )
         self.assertEqual((ns.auth_fail_burst, ns.auth_fail_per_minute), (30, 10.0), "los valores del contrato §7.5")
         self.assertEqual((ns.anon_org, ns.anon_email), ("privada", "analista@privada.test"))
@@ -1255,8 +1256,9 @@ class MissingInspectorTest(unittest.TestCase):
 
 # La pila simulada no simula la observabilidad de uso (Fase 4): el grupo «uso» se prueba contra la pila real y aquí
 # solo sus utilidades (tests/test_e2e_uso.py); lo mismo con «acl»
-# (tests/test_e2e_acl.py). Sin `--only`, el recorrido es el de los grupos de H4.
-H4_GROUPS = ",".join(g for g in e2e_h4.GROUPS if g not in ("uso", "acl"))
+# (tests/test_e2e_acl.py), y con «catalogo» (tests/test_e2e_catalogo.py). Sin `--only`, el recorrido es el de los
+# grupos de H4.
+H4_GROUPS = ",".join(g for g in e2e_h4.GROUPS if g not in ("uso", "catalogo", "acl"))
 
 
 def run_e2e(
