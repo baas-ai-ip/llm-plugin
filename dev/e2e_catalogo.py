@@ -25,7 +25,6 @@ dentro de los contenedores: no necesita `--inspect`.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import tempfile
 from collections.abc import Iterator
@@ -52,16 +51,11 @@ BASE, REPORT = "base", "informe"  # skills del escenario: `informe` depende de `
 DOC = "knowledge/ventas/guia.md"
 MISSING_DOC = "knowledge/no/existe.md"
 INTERNAL_TOKEN = "baas-dev-internal-token"  # BAAS_INTERNAL_TOKEN de env/dev/webapp-api.env y mcp-server.env
-REASON = "Prueba de punta a punta del grupo catalogo"
 # Claves que nunca pueden venir en una respuesta de la API del catálogo (el cuerpo de un fichero)
 BODY_KEYS = frozenset({"content", "body", "text", "excerpt", "data", "chunks"})
 
 
 # --- utilidades puras ----------------------------------------------------------------------------
-
-
-def sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def keys_in(value: Any) -> set[str]:
@@ -279,9 +273,10 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "PUT", org, f"skills/{name}/status", self.org_admin, {"status": status, "expected_sha256": expected}
         )
 
-    def status_audit_rows(self) -> int:
-        """Cuántas filas `skill.status_changed` sobre `BASE` hay en la auditoría (la ve el PLATFORM_ADMIN)."""
-        res = self.e.webapp("GET", "/api/v1/audit?action=skill.status_changed&limit=200", self.admin)
+    def status_audit_rows(self, org: e2e_uso.UsoOrg) -> int:
+        """Cuántas filas `skill.status_changed` sobre `BASE` tiene la auditoría de `org` (filtrada por su slug: las filas
+        de organizaciones eliminadas sobreviven y llenarían las últimas 200) (la ve el PLATFORM_ADMIN)."""
+        res = self.e.webapp("GET", f"/api/v1/audit?action=skill.status_changed&org={org.slug}&limit=200", self.admin)
         check(res.status == 200, f"GET /api/v1/audit → {e2e_uso.describe(res)}")
         items = (res.json() or {}).get("items") or []
         return sum(1 for i in items if isinstance(i, dict) and i.get("target_id") == BASE)
@@ -307,14 +302,6 @@ class CatalogoGroup(e2e_uso.UsoGroup):
         except Exception as exc:
             raise StepError(f"{tool}: {type(exc).__name__}: {exc}") from None
         raise StepError(f"{tool} {args} funcionó y debía fallar")
-
-    def mcp_readable(self, org: e2e_uso.UsoOrg, who: str, tool: str, args: dict[str, Any]) -> bool:
-        with self.mcp(org, who) as client:
-            try:
-                client.call_tool(tool, args)
-            except McpToolError:
-                return False
-            return True
 
     # --- 15.0 la pila tiene la API --------------------------------------------------------------------
     def stack_has_api(self) -> str:
@@ -350,13 +337,11 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             check(DOC in docs, f"el documento {DOC} no está en el listado: {sorted(docs)}")
             check(docs[DOC]["roles"] == [ROLE], f"roles de {DOC}: {docs[DOC]['roles']}")
             check(docs[DOC].get("sha256") and docs[DOC].get("size"), f"{DOC} sin huella o tamaño: {docs[DOC]}")
-            admin_roles = self.e.webapp("GET", "/api/v1/me", self.org_admin).json() or {}
             who = self.api_json("GET", org, "skills", self.admin)  # el PLATFORM_ADMIN también lo ve
             check(
                 {s.get("name") for s in who.get("skills") or []} == {BASE, REPORT},
                 "el PLATFORM_ADMIN no ve las mismas skills",
             )
-            del admin_roles
         return (
             f"ORG_ADMIN (sin el rol «{ROLE}») ve {len(skills)} skills ({BASE}: skill_md, {REPORT}: baas.yaml) y "
             f"{len(docs)} documento con sus roles; el PLATFORM_ADMIN lo mismo"
@@ -713,7 +698,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             )
             check(user_sees(), f"el USER no ve «{BASE}» antes de desactivarla")
             # sin baas.yaml, el estado que ya tiene (`active`) es idempotente: 200, huella null, nada se escribe ni se audita
-            audit0 = self.status_audit_rows()
+            audit0 = self.status_audit_rows(org)
             noop = self.put_status(org, BASE, "active", None)
             nd = noop.json() or {}
             check(
@@ -796,7 +781,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             self.wait(
                 lambda: (
                     [f"skill.status_changed: {n} filas nuevas (se esperaban 2)"]
-                    if (n := self.status_audit_rows() - audit0) != 2
+                    if (n := self.status_audit_rows(org) - audit0) != 2
                     else []
                 ),
                 10,
