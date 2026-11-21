@@ -1,6 +1,6 @@
-"""Grupo «catalogo» (13.x) de la prueba de punta a punta de H4 (`dev/e2e_catalogo.py`).
+"""Grupo «catalogo» (15.x) de la prueba de punta a punta de H4 (`dev/e2e_catalogo.py`).
 
-Los pasos 13.0–13.8 se ejecutan contra la pila real; aquí se prueban las utilidades puras con las que deciden, para que
+Los pasos 15.0–15.8 se ejecutan contra la pila real; aquí se prueban las utilidades puras con las que deciden, para que
 un paso no pase por error (que no vea un cuerpo, que dé por buena una respuesta `200` de `/internal`). Con `unittest`.
 """
 
@@ -100,7 +100,7 @@ class WiringTest(unittest.TestCase):
             nonce = "n"
 
         e2e_catalogo.CatalogoGroup(E2E()).register(Fake(), ["0"])  # type: ignore[arg-type]
-        self.assertEqual([n.split(" ")[0] for n in names], [f"13.{i}" for i in range(9)])
+        self.assertEqual([n.split(" ")[0] for n in names], [f"15.{i}" for i in range(9)])
 
 
 if __name__ == "__main__":

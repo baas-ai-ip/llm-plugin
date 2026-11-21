@@ -40,12 +40,12 @@ Por HTTP directo (sin Claude Code), con las claves deterministas del contrato §
         distinto, reciben `401` y la 31.ª `429` con `Retry-After` en el proxy (`baas_auth_rate_limited`) y en el MCP
         (`RATE_LIMITED`); en una ráfaga lenta, el `429` puede llegar tras las fichas que volvieron mientras duraba. Una
         clave ya válida pasa desde la IP frenada; desde el equipo, una desconocida sigue en `401`.
-  13.   (pasos 13.0–13.8) Catálogo de skills y conocimiento (grupo «catalogo», `dev/e2e_catalogo.py`): la API de
+  15.   (pasos 15.0–15.8) Catálogo de skills y conocimiento (grupo «catalogo», `dev/e2e_catalogo.py`): la API de
         administración de la webapp (`/api/v1/orgs/<org>/catalog/…`) lista y detalla skills y conocimiento, solo para
         ORG_ADMIN y PLATFORM_ADMIN; cambiar roles y desactivar una skill cambia quién lee por el MCP y qué retira el
         `sync` del plugin; `409` en edición concurrente; `/internal/*` del MCP no sale por Caddy; ninguna respuesta
         lleva cuerpos de ficheros. Cada paso crea y elimina su organización (`cat-<ejecución>-…`). No mira dentro de
-        los contenedores. (La numeración 13 la fija el contrato del catálogo; el grupo «acl» usa también 13.1–13.5.)
+        los contenedores.
 
 Uso (pila de `deploy` con el proveedor falso: `scripts/dev-up.sh --fake-upstream`):
 
@@ -1290,7 +1290,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "pudieron volver durante una ráfaga lenta y cuánto esperar a que se llene el cubo si una "
                         "ejecución anterior lo dejó a medias")  # fmt: skip
     p.add_argument("--internal-token", default=e2e_catalogo.INTERNAL_TOKEN,
-                   help="Grupo catalogo (13.6): BAAS_INTERNAL_TOKEN de la pila (el de desarrollo); se envía a "
+                   help="Grupo catalogo (15.6): BAAS_INTERNAL_TOKEN de la pila (el de desarrollo); se envía a "
                         "/internal/* por Caddy para comprobar que lo bloquea Caddy y no el token")  # fmt: skip
     p.add_argument("--json", type=Path, help="Escribe aquí el informe en JSON")
     ns = p.parse_args(argv)

@@ -1,20 +1,20 @@
-"""Grupo «catalogo» (pasos 13.0–13.8) de `dev/e2e_h4.py`: el catálogo de administración de skills y conocimiento.
+"""Grupo «catalogo» (pasos 15.0–15.8) de `dev/e2e_h4.py`: el catálogo de administración de skills y conocimiento.
 
 Un paso por criterio de aceptación del contrato (`contrato-catalogo-admin.md`, §9 y §10) contra la pila real:
 
-  13.0  la pila tiene la API del catálogo (`GET /api/v1/orgs/<org>/catalog/skills`); si no, falla con un mensaje
+  15.0  la pila tiene la API del catálogo (`GET /api/v1/orgs/<org>/catalog/skills`); si no, falla con un mensaje
         claro y se **saltan** los demás pasos.
-  13.1  un ORG_ADMIN lista skills y conocimiento y los ve todos, aunque no tenga esos roles.
-  13.2  ficha de una skill: roles y su origen, dependencias (con existencia, estado y roles), «usada por» e
+  15.1  un ORG_ADMIN lista skills y conocimiento y los ve todos, aunque no tenga esos roles.
+  15.2  ficha de una skill: roles y su origen, dependencias (con existencia, estado y roles), «usada por» e
         invocaciones; ficha de un documento con «usada por».
-  13.3  un USER recibe `403` en todas las rutas; sin sesión `401`; el ORG_ADMIN de otra organización, `404`.
-  13.4  `PUT` de roles de una skill (sin `baas.yaml` previo) y de un documento: cambia quién lee con `baas_get_skill`
+  15.3  un USER recibe `403` en todas las rutas; sin sesión `401`; el ORG_ADMIN de otra organización, `404`.
+  15.4  `PUT` de roles de una skill (sin `baas.yaml` previo) y de un documento: cambia quién lee con `baas_get_skill`
         y `baas_read_document`; el cuerpo del documento queda intacto; roles inexistentes → `422 INVALID_ROLES`.
-  13.5  edición concurrente: dos `PUT` con el mismo `expected_sha256` → el segundo da `409` y no pisa nada.
-  13.6  `GET <mcp>/internal/v1/orgs/<org>/skills` por Caddy → `404`, también con el token interno y con variantes
+  15.5  edición concurrente: dos `PUT` con el mismo `expected_sha256` → el segundo da `409` y no pisa nada.
+  15.6  `GET <mcp>/internal/v1/orgs/<org>/skills` por Caddy → `404`, también con el token interno y con variantes
         codificadas (`%2e%2e`, barras, mayúsculas): nunca `200` ni datos.
-  13.7  ninguna respuesta (de la API del catálogo ni de Caddy) contiene el cuerpo de un fichero.
-  13.8  desactivar una skill: el USER recibe `NOT_FOUND` y no la ve en el listado, el administrador sí («deprecated»),
+  15.7  ninguna respuesta (de la API del catálogo ni de Caddy) contiene el cuerpo de un fichero.
+  15.8  desactivar una skill: el USER recibe `NOT_FOUND` y no la ve en el listado, el administrador sí («deprecated»),
         el `sync` del plugin la retira del disco, y al reactivarla vuelve (con sus roles).
 
 Cada paso crea su organización (`cat-<ejecución>-<paso>`, con usuarios de la semilla de desarrollo como miembros, un
@@ -96,7 +96,7 @@ def body_problems(label: str, raw: bytes, sentinels: dict[str, str]) -> list[str
 
 
 def catalog_api_problem(status: int, body: Any) -> str | None:
-    """13.0: qué decir si `GET …/catalog/skills` (como PLATFORM_ADMIN, de una organización que existe) no da 200."""
+    """15.0: qué decir si `GET …/catalog/skills` (como PLATFORM_ADMIN, de una organización que existe) no da 200."""
     if status == 200:
         return None
     if status == 404:
@@ -114,7 +114,7 @@ def catalog_api_problem(status: int, body: Any) -> str | None:
 
 
 def internal_paths(org: str) -> list[str]:
-    """Rutas con las que alguien intentaría llegar a `/internal/v1` del MCP por el sitio público (13.6): la buena y
+    """Rutas con las que alguien intentaría llegar a `/internal/v1` del MCP por el sitio público (15.6): la buena y
     variantes de mayúsculas, barras, puntos y codificación."""
     skills = f"v1/orgs/{org}/skills"
     return [
@@ -140,7 +140,7 @@ def internal_paths(org: str) -> list[str]:
 
 
 def leak_problems(path: str, res: Http, with_token: bool) -> list[str]:
-    """13.6: lo que no puede contestar Caddy a una ruta interna: `200`, datos del catálogo o ficheros del equipo."""
+    """15.6: lo que no puede contestar Caddy a una ruta interna: `200`, datos del catálogo o ficheros del equipo."""
     how = "con el token interno" if with_token else "sin token"
     text = res.body.decode(errors="replace")
     problems = []
@@ -279,6 +279,13 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "PUT", org, f"skills/{name}/status", self.org_admin, {"status": status, "expected_sha256": expected}
         )
 
+    def status_audit_rows(self) -> int:
+        """Cuántas filas `skill.status_changed` sobre `BASE` hay en la auditoría (la ve el PLATFORM_ADMIN)."""
+        res = self.e.webapp("GET", "/api/v1/audit?action=skill.status_changed&limit=200", self.admin)
+        check(res.status == 200, f"GET /api/v1/audit → {e2e_uso.describe(res)}")
+        items = (res.json() or {}).get("items") or []
+        return sum(1 for i in items if isinstance(i, dict) and i.get("target_id") == BASE)
+
     def skill_detail(self, org: e2e_uso.UsoOrg, name: str) -> dict[str, Any]:
         return self.api_json("GET", org, f"skills/{name}", self.org_admin)
 
@@ -309,7 +316,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                 return False
             return True
 
-    # --- 13.0 la pila tiene la API --------------------------------------------------------------------
+    # --- 15.0 la pila tiene la API --------------------------------------------------------------------
     def stack_has_api(self) -> str:
         res = self.e.webapp("GET", f"/api/v1/orgs/{META_ORG}/catalog/skills", self.admin)
         why = catalog_api_problem(res.status, res.json())
@@ -319,7 +326,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"GET /api/v1/orgs/{META_ORG}/catalog/skills → 200 ({count} skills de la organización meta; la API existe)"
         )
 
-    # --- 13.1 listados ----------------------------------------------------------------------------------
+    # --- 15.1 listados ----------------------------------------------------------------------------------
     def listing(self) -> str:
         with self.scenario("li") as org:
             skills = self.skill_names(org)
@@ -355,7 +362,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"{len(docs)} documento con sus roles; el PLATFORM_ADMIN lo mismo"
         )
 
-    # --- 13.2 fichas ------------------------------------------------------------------------------------
+    # --- 15.2 fichas ------------------------------------------------------------------------------------
     def details(self) -> str:
         with self.scenario("de") as org:
             detail = self.skill_detail(org, REPORT)
@@ -418,7 +425,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"que no existe; «{BASE}» y {DOC} dicen «usada por» {REPORT}; usage 0 invocaciones; skill inexistente → 404"
         )
 
-    # --- 13.3 permisos ------------------------------------------------------------------------------------
+    # --- 15.3 permisos ------------------------------------------------------------------------------------
     def permissions(self) -> str:
         with self.scenario("pe") as org:
             routes = [
@@ -461,7 +468,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "organización inexistente → 404; nada cambió"
         )
 
-    # --- 13.4 cambiar roles ---------------------------------------------------------------------------------
+    # --- 15.4 cambiar roles ---------------------------------------------------------------------------------
     def change_roles(self) -> str:
         with self.scenario("ro") as org:
             s = self.sentinels
@@ -556,7 +563,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"otros → 422 INVALID_ROLES (field roles); {DOC} igual con el cuerpo byte a byte intacto"
         )
 
-    # --- 13.5 edición concurrente ----------------------------------------------------------------------------
+    # --- 15.5 edición concurrente ----------------------------------------------------------------------------
     def conflict(self) -> str:
         with self.scenario("co") as org:
             detail = self.skill_detail(org, REPORT)
@@ -597,7 +604,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "documento y estado con huella vieja → 409; nada pisado"
         )
 
-    # --- 13.6 Caddy bloquea /internal ------------------------------------------------------------------------------
+    # --- 15.6 Caddy bloquea /internal ------------------------------------------------------------------------------
     def caddy_blocks(self) -> str:
         with self.scenario("ca") as org:
             parts = urlsplit(str(org.bindings[self.org_admin]["mcp_url"]))
@@ -619,24 +626,27 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                     res = h3.http("GET", f"{origin}{path}", headers=headers, timeout=self.a.timeout)
                     self.seen.append((f"GET {origin}{path} (token={with_token})", res.body))
                     problems += leak_problems(path, res, with_token)
-            # y la API interna sí responde dentro de la red: lo prueba la webapp (13.1); aquí solo se mira desde fuera
+            # y la API interna sí responde dentro de la red: lo prueba la webapp (15.1); aquí solo se mira desde fuera
             check(not problems, f"/internal/* de {origin} no está bloqueado:\n" + "\n".join(problems))
         return (
             f"GET {origin}/internal/v1/orgs/<org>/skills → 404 (sin token y con el token interno); además {len(paths)} variantes "
             "(mayúsculas, %69, %2F, %2e%2e, //, /./, /mcp/../, ficheros del equipo), con y sin token: ninguna 200 ni con datos"
         )
 
-    # --- 13.7 ninguna respuesta lleva cuerpos ------------------------------------------------------------------------
+    # --- 15.7 ninguna respuesta lleva cuerpos ------------------------------------------------------------------------
     def no_bodies(self) -> str:
         with self.scenario("cu") as org:
             requests = [("skills", None)] + [(f"skills/{n}", None) for n in (BASE, REPORT)]
             requests += [("knowledge", None), (f"knowledge/{self.short(DOC)}", None)]
             for path, _ in requests:
                 self.api("GET", org, path, self.org_admin)
-            self.put_roles(org, "skills", BASE, [ROLE], None)  # también las respuestas de las escrituras
-            detail = self.skill_detail(org, BASE)
-            self.put_status(org, BASE, "deprecated", detail["roles_sha256"])
-            self.put_status(org, BASE, "active", None)
+            # también las respuestas de las escrituras: cada una debe ser un 200 (si no, no se escanea el éxito)
+            written = self.put_roles(org, "skills", BASE, [ROLE], None)
+            check(written.status == 200, f"PUT roles de «{BASE}» → {e2e_uso.describe(written)} (se esperaba 200)")
+            deprecated = self.put_status(org, BASE, "deprecated", (written.json() or {}).get("roles_sha256"))
+            check(deprecated.status == 200, f"PUT status deprecated → {e2e_uso.describe(deprecated)} (se esperaba 200)")
+            active = self.put_status(org, BASE, "active", (deprecated.json() or {}).get("roles_sha256"))
+            check(active.status == 200, f"PUT status active → {e2e_uso.describe(active)} (se esperaba 200)")
             self.api("GET", org, f"skills/{BASE}", self.user)  # y las rechazadas
             self.api(
                 "PUT",
@@ -668,7 +678,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "de baas_get_skill del MCP sí lo lleva"
         )
 
-    # --- 13.8 desactivar y reactivar -----------------------------------------------------------------------------------
+    # --- 15.8 desactivar y reactivar -----------------------------------------------------------------------------------
     def disable(self) -> str:
         with self.scenario("de2") as org, tempfile.TemporaryDirectory(prefix="e2e-catalogo-") as tmp:
             root = Path(tmp)
@@ -702,12 +712,32 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                 f"el sync no escribió «{BASE}» en {plugin}",
             )
             check(user_sees(), f"el USER no ve «{BASE}» antes de desactivarla")
+            # sin baas.yaml, el estado que ya tiene (`active`) es idempotente: 200, huella null, nada se escribe ni se audita
+            audit0 = self.status_audit_rows()
+            noop = self.put_status(org, BASE, "active", None)
+            nd = noop.json() or {}
+            check(
+                noop.status == 200
+                and nd.get("status") == "active"
+                and "roles_sha256" in nd
+                and nd["roles_sha256"] is None,
+                f"PUT status active sobre «{BASE}» sin baas.yaml → {e2e_uso.describe(noop)}: {nd} "
+                "(se esperaba 200 con roles_sha256 null)",
+            )
+            untouched = self.skill_detail(org, BASE)
+            check(
+                untouched["roles_sha256"] is None and untouched["roles_source"] == "skill_md",
+                f"el PUT idempotente escribió un baas.yaml: {untouched['roles_source']} / {untouched['roles_sha256']!r}",
+            )
             # desactivar: la skill no tiene baas.yaml, se crea con los roles heredados de SKILL.md
             res = self.put_status(org, BASE, "deprecated", None)
             data = res.json() or {}
             check(
                 res.status == 200 and data.get("status") == "deprecated" and data.get("roles_sha256"),
                 f"PUT status deprecated → {e2e_uso.describe(res)}: {data}",
+            )
+            check(
+                isinstance(data["roles_sha256"], str), f"el cambio real devolvió roles_sha256 {data['roles_sha256']!r}"
             )
             created = str(data["roles_sha256"])
             again = self.put_status(org, BASE, "deprecated", created)
@@ -762,6 +792,16 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                 stale.status == 409,
                 f"PUT de estado con una huella cualquiera → {e2e_uso.describe(stale)} (se esperaba 409)",
             )
+            # auditoría: solo los dos cambios reales (deprecated y active); los PUT idempotentes no auditan
+            self.wait(
+                lambda: (
+                    [f"skill.status_changed: {n} filas nuevas (se esperaban 2)"]
+                    if (n := self.status_audit_rows() - audit0) != 2
+                    else []
+                ),
+                10,
+                "la auditoría de skill.status_changed no cuadra",
+            )
         return (
             f"«{BASE}»: desactivada (idempotente) → USER NOT_FOUND y sin verla en baas_list_skills, administrador la ve «deprecated» "
             f"({REPORT} la ve igual); sync 2 la retira del disco (sync 1 la había traído); reactivada → vuelve (sync 3 la restaura)"
@@ -770,20 +810,20 @@ class CatalogoGroup(e2e_uso.UsoGroup):
     # --- el recorrido ------------------------------------------------------------------------------------------------------
     def register(self, runner: Runner, base: list[str]) -> None:
         step = runner.step
-        ready = "13.0 la pila tiene la API del catálogo"
+        ready = "15.0 la pila tiene la API del catálogo"
         step(ready, self.stack_has_api, needs=base)
         base = [*base, ready]
         step(
-            "13.1 ORG_ADMIN lista skills y conocimiento (ve todo, aunque no tenga esos roles)", self.listing, needs=base
+            "15.1 ORG_ADMIN lista skills y conocimiento (ve todo, aunque no tenga esos roles)", self.listing, needs=base
         )
-        step("13.2 ficha de una skill con dependencias y «usada por»", self.details, needs=base)
-        step("13.3 USER recibe 403 (sin sesión 401, otra organización 404)", self.permissions, needs=base)
-        step("13.4 PUT de roles cambia quién lee con baas_get_skill (skill y documento)", self.change_roles, needs=base)
-        step("13.5 409 en edición concurrente (dos PUT con el mismo expected_sha256)", self.conflict, needs=base)
-        step("13.6 GET mcp.<dominio>/internal/v1/orgs/<org>/skills → 404 por Caddy", self.caddy_blocks, needs=base)
-        step("13.7 ninguna respuesta contiene cuerpos de ficheros", self.no_bodies, needs=base)
+        step("15.2 ficha de una skill con dependencias y «usada por»", self.details, needs=base)
+        step("15.3 USER recibe 403 (sin sesión 401, otra organización 404)", self.permissions, needs=base)
+        step("15.4 PUT de roles cambia quién lee con baas_get_skill (skill y documento)", self.change_roles, needs=base)
+        step("15.5 409 en edición concurrente (dos PUT con el mismo expected_sha256)", self.conflict, needs=base)
+        step("15.6 GET mcp.<dominio>/internal/v1/orgs/<org>/skills → 404 por Caddy", self.caddy_blocks, needs=base)
+        step("15.7 ninguna respuesta contiene cuerpos de ficheros", self.no_bodies, needs=base)
         step(
-            "13.8 desactivar una skill: NOT_FOUND al USER, el administrador la ve, sync la retira; reactivar la devuelve",
+            "15.8 desactivar una skill: NOT_FOUND al USER, el administrador la ve, sync la retira; reactivar la devuelve",
             self.disable,
             needs=base,
         )
