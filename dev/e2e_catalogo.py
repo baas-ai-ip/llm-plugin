@@ -1,4 +1,4 @@
-"""Grupo «catalogo» (pasos 15.0–15.8) de `dev/e2e_h4.py`: el catálogo de administración de skills y conocimiento.
+"""Grupo «catalogo» (pasos 15.0–15.9) de `dev/e2e_h4.py`: el catálogo de administración de skills y conocimiento.
 
 Un paso por criterio de aceptación del contrato (`contrato-catalogo-admin.md`, §9 y §10) contra la pila real:
 
@@ -13,9 +13,15 @@ Un paso por criterio de aceptación del contrato (`contrato-catalogo-admin.md`, 
   15.5  edición concurrente: dos `PUT` con el mismo `expected_sha256` → el segundo da `409` y no pisa nada.
   15.6  `GET <mcp>/internal/v1/orgs/<org>/skills` por Caddy → `404`, también con el token interno y con variantes
         codificadas (`%2e%2e`, barras, mayúsculas): nunca `200` ni datos.
-  15.7  ninguna respuesta (de la API del catálogo ni de Caddy) contiene el cuerpo de un fichero.
+  15.7  ninguna respuesta (de la API del catálogo ni de Caddy) contiene el cuerpo de un fichero, salvo las `200` de la
+        ruta de ficheros de una skill (`…/skills/<nombre>/files/<ruta>`, §3.4), que lo llevan a propósito; sus errores
+        (`403`, `404`, `413`, `415`, `422`) sí se escanean.
   15.8  desactivar una skill: el USER recibe `NOT_FOUND` y no la ve en el listado, el administrador sí («deprecated»),
         el `sync` del plugin la retira del disco, y al reactivarla vuelve (con sus roles).
+  15.9  leer el contenido de un fichero de una skill (§3.4): el ORG_ADMIN abre `SKILL.md` y un script y recibe lo que
+        se escribió (con `size` y `sha256` del disco y sin caché); USER `403`, sin sesión `401`, otra organización
+        `404`, traversal y `_acl.yaml` `422`, más de 256 KiB `413`, binario `415`; una fila `skill.file_read` por
+        lectura correcta (visible para el ORG_ADMIN) y ninguna por los fallos, sin el contenido.
 
 Cada paso crea su organización (`cat-<ejecución>-<paso>`, con usuarios de la semilla de desarrollo como miembros, un
 rol funcional `ventas` para el USER y otro, `soporte`, para quitárselo) y la elimina al terminar. Ningún paso mira
@@ -24,12 +30,16 @@ dentro de los contenedores: no necesita `--inspect`.
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
 import json
+import re
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 from urllib.parse import urlsplit
 
 import e2e_h3 as h3
@@ -53,6 +63,11 @@ MISSING_DOC = "knowledge/no/existe.md"
 INTERNAL_TOKEN = "baas-dev-internal-token"  # BAAS_INTERNAL_TOKEN de env/dev/webapp-api.env y mcp-server.env
 # Claves que nunca pueden venir en una respuesta de la API del catálogo (el cuerpo de un fichero)
 BODY_KEYS = frozenset({"content", "body", "text", "excerpt", "data", "chunks"})
+MAX_FILE_VIEW_BYTES = 262144  # tope de la lectura de un fichero de skill (contrato §3.4)
+# La ruta de ficheros de una skill (relativa a `…/catalog/`): la única que devuelve un cuerpo
+FILES_ROUTE = re.compile(r"^skills/[^/?#]+/files/.+")
+# Ficheros que 15.7 y 15.9 añaden a `base` (ruta dentro de la skill)
+BIG, BINARY, LIMIT, NESTED_ACL = "scripts/grande.txt", "scripts/binario.bin", "scripts/limite.txt", "scripts/_acl.yaml"
 
 
 # --- utilidades puras ----------------------------------------------------------------------------
@@ -145,6 +160,59 @@ def leak_problems(path: str, res: Http, with_token: bool) -> list[str]:
     return problems
 
 
+class Seen(NamedTuple):
+    """Una respuesta de la prueba: qué se pidió, su cuerpo y si lleva el cuerpo de un fichero a propósito (la `200` de
+    la ruta de ficheros de una skill)."""
+
+    label: str
+    body: bytes
+    content_expected: bool = False
+
+
+def is_file_content(method: str, path: str, status: int) -> bool:
+    """15.7: ¿es la respuesta una `200` de la ruta de ficheros de una skill (`GET skills/<nombre>/files/<ruta>`)? Es lo
+    único que puede llevar un cuerpo; un error de esa misma ruta, no."""
+    return method == "GET" and status == 200 and FILES_ROUTE.match(path) is not None
+
+
+def scan_seen(seen: list[Seen], sentinels: dict[str, str]) -> list[str]:
+    """15.7: los problemas de todas las respuestas recogidas, salvo las que llevan un cuerpo a propósito."""
+    problems: list[str] = []
+    for item in seen:
+        if not item.content_expected:
+            problems += body_problems(item.label, item.body, sentinels)
+    return problems
+
+
+def header_value(res: Http, name: str) -> str | None:
+    """El valor de una cabecera de la respuesta (sin distinguir mayúsculas), o `None`."""
+    for key, value in res.headers:
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def no_store_problems(label: str, res: Http) -> list[str]:
+    """15.9: la `200` con el contenido de un fichero no se guarda en caché (`Cache-Control: no-store`, `Pragma: no-cache`)."""
+    problems = []
+    cache = header_value(res, "Cache-Control") or ""
+    if "no-store" not in [d.strip().lower() for d in cache.split(",")]:
+        problems.append(f"{label}: Cache-Control {cache!r} (se esperaba no-store)")
+    pragma = header_value(res, "Pragma") or ""
+    if pragma.strip().lower() != "no-cache":
+        problems.append(f"{label}: Pragma {pragma!r} (se esperaba no-cache)")
+    return problems
+
+
+def sized_text(head: str, size: int) -> bytes:
+    """Un texto UTF-8 ASCII de exactamente `size` bytes que empieza por `head` (para 413: 262145 bytes)."""
+    text = (head + "\n").encode()
+    line = b"x" * 79 + b"\n"
+    body = text + line * ((size - len(text)) // len(line))
+    body += b"y" * (size - len(body))
+    return body
+
+
 # --- la prueba ------------------------------------------------------------------------------------
 
 
@@ -157,8 +225,11 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "SKILL.md": f"CATALOGO-CUERPO-SKILL-{self.nonce}",
             "documento": f"CATALOGO-CUERPO-DOC-{self.nonce}",
             "script": f"CATALOGO-CUERPO-SCRIPT-{self.nonce}",
+            "grande": f"CATALOGO-CUERPO-GRANDE-{self.nonce}",
+            "binario": f"CATALOGO-CUERPO-BINARIO-{self.nonce}",
+            "limite": f"CATALOGO-CUERPO-LIMITE-{self.nonce}",
         }
-        self.seen: list[tuple[str, bytes]] = []  # (qué se pidió, cuerpo) de cada respuesta de los pasos
+        self.seen: list[Seen] = []  # cada respuesta de los pasos: qué se pidió, su cuerpo y si lleva uno a propósito
         self.mcp_urls: dict[str, str] = {}
         self.internal_token = getattr(e2e.args, "internal_token", INTERNAL_TOKEN)
 
@@ -218,17 +289,11 @@ class CatalogoGroup(e2e_uso.UsoGroup):
         - `knowledge/ventas/guia.md` (roles `[ventas]`)."""
         s = self.sentinels
         with self.org(label, {self.org_admin: "ORG_ADMIN", self.user: "USER"}) as org:
-
-            def skill_md(name: str) -> str:
-                return (
-                    f"---\ntitle: {name.title()}\ntype: skill\nroles: [{ROLE}]\nstatus: active\n"
-                    f"description: Prueba {self.nonce}.\n---\n# {name}\n{s['SKILL.md']}\n"
-                )
-
+            skill_md = self.skill_md
             manifest = f"version: 1\nroles: [{ROLE}]\ndepends_on:\n  skills: [{BASE}]\n  knowledge:\n    - {DOC}\n    - {MISSING_DOC}\n"
             files = [
                 {"path": f"skills/{BASE}/SKILL.md", "content": skill_md(BASE)},
-                {"path": f"skills/{BASE}/scripts/hola.py", "content": f"print('{s['script']}')\n"},
+                {"path": f"skills/{BASE}/scripts/hola.py", "content": self.script_text()},
                 {"path": f"skills/{REPORT}/SKILL.md", "content": skill_md(REPORT)},
                 {"path": f"skills/{REPORT}/baas.yaml", "content": manifest},
             ]
@@ -237,17 +302,55 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             self.write_doc_roles(org, DOC, f"{s['documento']}\nCuerpo del documento.")
             yield org
 
+    def skill_md(self, name: str) -> str:
+        """El `SKILL.md` que el escenario escribe (con el centinela del cuerpo)."""
+        return (
+            f"---\ntitle: {name.title()}\ntype: skill\nroles: [{ROLE}]\nstatus: active\n"
+            f"description: Prueba {self.nonce}.\n---\n# {name}\n{self.sentinels['SKILL.md']}\n"
+        )
+
+    def script_text(self) -> str:
+        return f"print('{self.sentinels['script']}')\n"
+
+    def view_files(self) -> dict[str, bytes]:
+        """Lo que 15.7 y 15.9 añaden a `base` (ruta dentro de la skill → bytes): un fichero que pasa del tope por un byte,
+        otro que lo alcanza justo, un binario (con NUL y bytes que no son UTF-8, y un centinela por si se filtra) y un
+        `_acl.yaml` de subcarpeta (forma parte del paquete, pero no se abre)."""
+        s = self.sentinels
+        return {
+            BIG: sized_text(s["grande"], MAX_FILE_VIEW_BYTES + 1),
+            LIMIT: sized_text(s["limite"], MAX_FILE_VIEW_BYTES),
+            BINARY: b"\x00\xff\xfe" + s["binario"].encode() + bytes(range(256)),
+            NESTED_ACL: f"roles: [{ROLE}]\n".encode(),
+        }
+
+    def write_view_files(self, org: e2e_uso.UsoOrg) -> None:
+        """Escribe `view_files` en `skills/base` como ORG_ADMIN con `baas_write_files` (`encoding: base64`: son bytes)."""
+        files = [
+            {"path": f"skills/{BASE}/{path}", "content": base64.b64encode(raw).decode(), "encoding": "base64"}
+            for path, raw in self.view_files().items()
+        ]
+        with self.mcp(org, self.org_admin) as client:
+            self.call(client, "baas_write_files", {"files": files})
+
     def write_doc_roles(self, org: e2e_uso.UsoOrg, path: str, text: str) -> None:
         content = f"---\ntitle: Guia {self.nonce}\ntype: knowledge\nroles: [{ROLE}]\n---\n{text}\n"
         with self.mcp(org, self.org_admin) as client:
             self.call(client, "baas_write_document", {"path": path, "content": content})
 
     # --- la API del catálogo -------------------------------------------------------------------------
-    def api(self, method: str, org: e2e_uso.UsoOrg | str, path: str, who: str, payload: Any = None) -> Http:
+    def api(self, method: str, org: e2e_uso.UsoOrg | str, path: str, who: str | None, payload: Any = None) -> Http:
+        """Una petición a la API del catálogo como `who` (`None`: sin sesión); se guarda su respuesta para 15.7."""
         slug = org if isinstance(org, str) else org.slug
         url = f"/api/v1/orgs/{slug}/catalog/{path}"
-        res = self.e.webapp(method, url, who, payload)
-        self.seen.append((f"{method} {url} ({who})", res.body))
+        if who is None:
+            headers = {"X-Requested-With": "baas-webapp"} if method != "GET" else {}
+            res = h3.http(method, f"{self.a.app_url}{url}", payload=payload, headers=headers, timeout=self.a.timeout)
+        else:
+            res = self.e.webapp(method, url, who, payload)
+        self.seen.append(
+            Seen(f"{method} {url} ({who or 'sin sesión'})", res.body, is_file_content(method, path, res.status))
+        )
         return res
 
     def api_json(
@@ -600,7 +703,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             for with_token in (False, True):
                 headers = {"X-Baas-Internal-Token": self.internal_token} if with_token else {}
                 res = h3.http("GET", f"{origin}{paths[0]}", headers=headers, timeout=self.a.timeout)
-                self.seen.append((f"GET {origin}{paths[0]} (token={with_token})", res.body))
+                self.seen.append(Seen(f"GET {origin}{paths[0]} (token={with_token})", res.body))
                 if res.status != 404:
                     problems.append(
                         f"{paths[0]} ({'con' if with_token else 'sin'} token) → HTTP {res.status} (se esperaba 404): {h3.snippet(res.body, 120)}"
@@ -609,7 +712,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                 for with_token in (False, True):
                     headers = {"X-Baas-Internal-Token": self.internal_token} if with_token else {}
                     res = h3.http("GET", f"{origin}{path}", headers=headers, timeout=self.a.timeout)
-                    self.seen.append((f"GET {origin}{path} (token={with_token})", res.body))
+                    self.seen.append(Seen(f"GET {origin}{path} (token={with_token})", res.body))
                     problems += leak_problems(path, res, with_token)
             # y la API interna sí responde dentro de la red: lo prueba la webapp (15.1); aquí solo se mira desde fuera
             check(not problems, f"/internal/* de {origin} no está bloqueado:\n" + "\n".join(problems))
@@ -640,11 +743,33 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                 self.org_admin,
                 {"roles": [f"no-{self.nonce}"], "expected_sha256": None},
             )
-            problems: list[str] = []
-            for label, raw in self.seen:
-                problems += body_problems(label, raw, self.sentinels)
+            # la ruta de ficheros de una skill: su 200 lleva el cuerpo a propósito (única excepción) pero todos sus
+            # errores se escanean igual que el resto
+            self.write_view_files(org)
+            ok = self.files_get(org, "SKILL.md", self.org_admin)
+            okd = ok.json() or {}
+            check(
+                ok.status == 200 and self.sentinels["SKILL.md"] in str(okd.get("content")),
+                f"control de la excepción: GET …/files/SKILL.md → {e2e_uso.describe(ok)} (se esperaba 200 con el contenido)",
+            )
+            rejected = [
+                ("SKILL.md", self.user, 403),
+                ("scripts/no-existe.py", self.org_admin, 404),
+                ("../informe/SKILL.md", self.org_admin, 422),
+                ("scripts/_acl.yaml", self.org_admin, 422),
+                (BIG, self.org_admin, 413),
+                (BINARY, self.org_admin, 415),
+            ]
+            for path, who, status in rejected:
+                res = self.files_get(org, path, who)
+                check(
+                    res.status == status,
+                    f"GET …/files/{path} ({who}) → {e2e_uso.describe(res)} (se esperaba {status}: se escanea su error)",
+                )
+            problems = scan_seen(self.seen, self.sentinels)
             check(not problems, "respuestas con cuerpos de ficheros:\n" + "\n".join(problems[:10]))
-            # control positivo: los centinelas están de verdad en los ficheros (el escáner no se queda ciego)
+            # controles positivos: los centinelas están de verdad en los ficheros (el escáner no se queda ciego) y la
+            # excepción exime solo a la 200 de la ruta de ficheros
             with self.mcp(org, self.org_admin) as admin:
                 skill = self.call(admin, "baas_get_skill", {"skill": BASE})
                 doc = self.call(admin, "baas_read_document", {"path": DOC})
@@ -656,11 +781,193 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                 self.sentinels["documento"] in str(doc.get("content")),
                 "control positivo: el documento no lleva su centinela",
             )
+            exempt = [i for i in self.seen if i.content_expected]
+            check(
+                len(exempt) == 1 and exempt[0].body == ok.body,
+                f"la excepción de la ruta de ficheros exime {len(exempt)} respuestas (se esperaba 1: la 200 de SKILL.md)",
+            )
+            check(
+                body_problems("200 de la ruta de ficheros", ok.body, self.sentinels),
+                "control positivo: el escáner no ve el contenido en la 200 de la ruta de ficheros",
+            )
             total = len(self.seen)
         return (
             f"{total} respuestas de la prueba (API del catálogo y Caddy; listas, fichas, PUT, errores) sin los centinelas de SKILL.md, "
-            f"script ni documento y sin claves de contenido ({', '.join(sorted(BODY_KEYS))}); control positivo: la respuesta "
-            "de baas_get_skill del MCP sí lo lleva"
+            f"script ni documento y sin claves de contenido ({', '.join(sorted(BODY_KEYS))}); la única exenta es la 200 de "
+            f"…/skills/{BASE}/files/SKILL.md (que lleva su contenido) y los errores de esa ruta (403, 404, 422, 413, 415) se "
+            "escanean igual; control positivo: la respuesta de baas_get_skill del MCP sí lleva el centinela"
+        )
+
+    # --- 15.9 contenido de un fichero de una skill ---------------------------------------------------------------------
+    def files_get(self, org: e2e_uso.UsoOrg | str, path: str, who: str | None, skill: str = BASE) -> Http:
+        """`GET …/catalog/skills/<skill>/files/<path>` (la ruta tal cual: no se codifica ni normaliza)."""
+        return self.api("GET", org, f"skills/{skill}/files/{path}", who)
+
+    def file_read_rows(self, org: e2e_uso.UsoOrg, who: str) -> tuple[list[dict[str, Any]], bytes]:
+        """Las filas `skill.file_read` de `BASE` de la auditoría de `org` que ve `who` (y la respuesta cruda, para escanearla)."""
+        res = self.e.webapp("GET", f"/api/v1/audit?action=skill.file_read&org={org.slug}&limit=200", who)
+        check(res.status == 200, f"GET /api/v1/audit (skill.file_read, {who}) → {e2e_uso.describe(res)}")
+        items = (res.json() or {}).get("items") or []
+        return [i for i in items if isinstance(i, dict) and i.get("target_id") == BASE], res.body
+
+    def file_read(self) -> str:
+        with self.scenario("fi") as org:
+            s = self.sentinels
+            self.write_view_files(org)
+            start = len(self.seen)
+            detail = self.skill_detail(org, BASE)
+            listed = {f["path"]: f for f in detail["file_list"]}
+            for path in (BIG, LIMIT, BINARY, NESTED_ACL, "SKILL.md", "scripts/hola.py"):
+                check(f"skills/{BASE}/{path}" in listed, f"«{path}» no está en file_list de «{BASE}»: {sorted(listed)}")
+            before, _ = self.file_read_rows(org, self.admin)
+            check(not before, f"la organización recién creada ya tiene {len(before)} filas skill.file_read")
+            # 1. el ORG_ADMIN abre SKILL.md y un script: lo que se escribió, con tamaño y huella del disco y sin caché
+            expected = {
+                "SKILL.md": (self.skill_md(BASE).encode(), "markdown"),
+                "scripts/hola.py": (self.script_text().encode(), "python"),
+                LIMIT: (self.view_files()[LIMIT], "text"),
+            }
+            reads: list[str] = []
+            for path, (raw, language) in expected.items():
+                res = self.files_get(org, path, self.org_admin)
+                data = res.json() or {}
+                check(res.status == 200 and isinstance(data, dict), f"GET …/files/{path} → {e2e_uso.describe(res)}")
+                problems = no_store_problems(f"GET …/files/{path}", res)
+                check(not problems, "\n".join(problems))
+                check(
+                    set(data) == {"skill", "path", "full_path", "size", "sha256", "encoding", "language", "content"},
+                    f"claves de la respuesta de {path}: {sorted(data)}",
+                )
+                check(
+                    data["content"].encode() == raw,
+                    f"el contenido de {path} no es el que se escribió: {h3.snippet(res.body, 160)}",
+                )
+                check(
+                    data["size"] == len(raw) and data["sha256"] == hashlib.sha256(raw).hexdigest(),
+                    f"{path}: size {data['size']} sha256 {data['sha256']} (se esperaba {len(raw)} / {hashlib.sha256(raw).hexdigest()})",
+                )
+                check(
+                    (data["skill"], data["path"], data["full_path"], data["encoding"], data["language"])
+                    == (BASE, path, f"skills/{BASE}/{path}", "utf8", language),
+                    f"metadatos de {path}: { {k: v for k, v in data.items() if k != 'content'} }",
+                )
+                check(
+                    listed[f"skills/{BASE}/{path}"]["sha256"] == data["sha256"],
+                    f"la huella de {path} no coincide con la de file_list ({listed[f'skills/{BASE}/{path}']['sha256']})",
+                )
+                reads.append(path)
+            # el mismo fichero dos veces: dos filas (una por lectura, no agregadas)
+            again = self.files_get(org, "SKILL.md", self.org_admin)
+            check(again.status == 200, f"segunda lectura de SKILL.md → {e2e_uso.describe(again)}")
+            reads.append("SKILL.md")
+            # 2. permisos: USER 403, sin sesión 401, otra organización 404
+            denied = {
+                "USER": (self.files_get(org, "SKILL.md", self.user), 403),
+                "sin sesión": (self.files_get(org, "SKILL.md", None), 401),
+                "ORG_ADMIN de otra organización": (self.files_get(org, "SKILL.md", e2e_uso.OTHER_ADMIN), 404),
+                "organización inexistente": (self.files_get(f"cat-{self.nonce}-fantasma", "SKILL.md", self.admin), 404),
+            }
+            for who, (res, status) in denied.items():
+                check(
+                    res.status == status, f"…/files/SKILL.md ({who}) → {e2e_uso.describe(res)} (se esperaba {status})"
+                )
+            check((denied["USER"][0].json() or {}).get("error") == "FORBIDDEN", "el USER no recibe FORBIDDEN")
+            # 3. traversal y _acl.yaml: 422 INVALID_ARGUMENT, que valida la webapp antes de llamar al MCP
+            invalid = [
+                "../informe/SKILL.md",
+                "%2e%2e/informe/SKILL.md",
+                "scripts/%2e%2e/%2e%2e/informe/SKILL.md",
+                "scripts/..%2f..%2finforme/SKILL.md",
+                "..%2f..%2f..%2f..%2fetc%2fpasswd",
+                "/SKILL.md",
+                "scripts//hola.py",
+                "scripts/./hola.py",
+                "_acl.yaml",
+                "scripts/_acl.yaml",
+                "scripts/%5Facl.yaml",
+            ]
+            for path in dict.fromkeys(invalid):
+                res = self.files_get(org, path, self.org_admin)
+                bd = res.json() or {}
+                check(
+                    res.status == 422 and bd.get("error") == "INVALID_ARGUMENT" and bd.get("field") == "path",
+                    f"GET …/files/{path} → {e2e_uso.describe(res)}: {bd} (se esperaba 422 INVALID_ARGUMENT, field path)",
+                )
+            # 4. no existe → 404; más de 256 KiB → 413 con size y max_bytes; binario → 415
+            missing = self.files_get(org, "scripts/no-existe.py", self.org_admin)
+            check(missing.status == 404, f"fichero inexistente → {e2e_uso.describe(missing)} (se esperaba 404)")
+            missing_skill = self.files_get(org, "SKILL.md", self.org_admin, skill="no-existe")
+            check(
+                missing_skill.status == 404, f"skill inexistente → {e2e_uso.describe(missing_skill)} (se esperaba 404)"
+            )
+            big = self.files_get(org, BIG, self.org_admin)
+            bd = big.json() or {}
+            check(
+                big.status == 413
+                and bd.get("error") == "CONTENT_TOO_LARGE"
+                and bd.get("size") == MAX_FILE_VIEW_BYTES + 1
+                and bd.get("max_bytes") == MAX_FILE_VIEW_BYTES,
+                f"fichero de {MAX_FILE_VIEW_BYTES + 1} bytes → {e2e_uso.describe(big)}: {bd} "
+                f"(se esperaba 413 CONTENT_TOO_LARGE con size {MAX_FILE_VIEW_BYTES + 1} y max_bytes {MAX_FILE_VIEW_BYTES})",
+            )
+            binary = self.files_get(org, BINARY, self.org_admin)
+            check(
+                binary.status == 415 and (binary.json() or {}).get("error") == "CONTENT_NOT_TEXT",
+                f"fichero binario → {e2e_uso.describe(binary)} (se esperaba 415 CONTENT_NOT_TEXT)",
+            )
+            # 5. auditoría: una fila por lectura correcta, ninguna por los fallos, y nunca el contenido
+            failures = len(denied) + len(dict.fromkeys(invalid)) + 4
+            self.wait(
+                lambda: (
+                    [f"skill.file_read: {n} filas nuevas (se esperaban {len(reads)})"]
+                    if (n := len(self.file_read_rows(org, self.admin)[0]) - len(before)) != len(reads)
+                    else []
+                ),
+                10,
+                "la auditoría de skill.file_read no cuadra",
+            )
+            time.sleep(1.5)  # y los fallos no la hacen crecer después
+            rows, raw_platform = self.file_read_rows(org, self.admin)
+            check(
+                len(rows) == len(reads),
+                f"{failures} lecturas fallidas dejaron {len(rows)} filas (se esperaban {len(reads)})",
+            )
+            observed = sorted((r["metadata"]["path"], r["metadata"]["sha256"], r["metadata"]["size"]) for r in rows)
+            wanted = sorted((p, hashlib.sha256(expected[p][0]).hexdigest(), len(expected[p][0])) for p in reads)
+            check(observed == wanted, f"filas de auditoría {observed} ≠ lecturas correctas {wanted}")
+            for row in rows:
+                who = (row.get("actor") or {}).get("email")
+                check(
+                    who == self.org_admin
+                    and row.get("target_type") == "skill"
+                    and row.get("org_slug") == org.slug
+                    and row.get("count") == 1,
+                    f"fila de auditoría: actor {who}, {row.get('target_type')}, {row.get('org_slug')}, count {row.get('count')}",
+                )
+                check(
+                    not (set(row["metadata"]) & BODY_KEYS),
+                    f"la fila lleva claves de contenido: {sorted(row['metadata'])}",
+                )
+            # el ORG_ADMIN de la organización ve las mismas filas (no es una acción solo de plataforma)
+            seen_by_admin, raw_org = self.file_read_rows(org, self.org_admin)
+            check(
+                {r["id"] for r in seen_by_admin} == {r["id"] for r in rows},
+                f"el ORG_ADMIN ve {len(seen_by_admin)} filas skill.file_read y la plataforma {len(rows)}",
+            )
+            leaks = body_problems("auditoría (PLATFORM_ADMIN)", raw_platform, s)
+            leaks += body_problems("auditoría (ORG_ADMIN)", raw_org, s)
+            check(not leaks, "el contenido aparece en la auditoría:\n" + "\n".join(leaks[:10]))
+            # los errores de la ruta de ficheros no llevan cuerpos (15.7 los escanea igual)
+            problems = scan_seen(self.seen[start:], s)
+            check(not problems, "respuestas de errores con cuerpos de ficheros:\n" + "\n".join(problems[:10]))
+        return (
+            f"ORG_ADMIN abre SKILL.md (dos veces), scripts/hola.py y un fichero de exactamente {MAX_FILE_VIEW_BYTES} bytes: "
+            "200 con el contenido escrito, size y sha256 del disco (los de file_list), Cache-Control no-store y Pragma "
+            f"no-cache; USER 403, sin sesión 401, otra organización 404; {len(dict.fromkeys(invalid))} rutas con traversal o "
+            f"_acl.yaml (también el de subcarpeta, que sí está en file_list) → 422; {MAX_FILE_VIEW_BYTES + 1} bytes → 413 "
+            "(size, max_bytes); binario → 415; inexistente → 404; auditoría: "
+            f"{len(rows)} filas skill.file_read (una por lectura correcta, ninguna por las {failures} fallidas, con path, "
+            "sha256 y size, sin contenido), visibles para el ORG_ADMIN"
         )
 
     # --- 15.8 desactivar y reactivar -----------------------------------------------------------------------------------
@@ -806,9 +1113,18 @@ class CatalogoGroup(e2e_uso.UsoGroup):
         step("15.4 PUT de roles cambia quién lee con baas_get_skill (skill y documento)", self.change_roles, needs=base)
         step("15.5 409 en edición concurrente (dos PUT con el mismo expected_sha256)", self.conflict, needs=base)
         step("15.6 GET mcp.<dominio>/internal/v1/orgs/<org>/skills → 404 por Caddy", self.caddy_blocks, needs=base)
-        step("15.7 ninguna respuesta contiene cuerpos de ficheros", self.no_bodies, needs=base)
+        step(
+            "15.7 ninguna respuesta contiene cuerpos de ficheros (salvo la 200 de la ruta de ficheros de una skill)",
+            self.no_bodies,
+            needs=base,
+        )
         step(
             "15.8 desactivar una skill: NOT_FOUND al USER, el administrador la ve, sync la retira; reactivar la devuelve",
             self.disable,
+            needs=base,
+        )
+        step(
+            "15.9 contenido de un fichero de una skill: ORG_ADMIN lo lee (auditado), USER 403, traversal 422, grande 413, binario 415",
+            self.file_read,
             needs=base,
         )

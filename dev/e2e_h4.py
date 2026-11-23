@@ -40,12 +40,14 @@ Por HTTP directo (sin Claude Code), con las claves deterministas del contrato §
         distinto, reciben `401` y la 31.ª `429` con `Retry-After` en el proxy (`baas_auth_rate_limited`) y en el MCP
         (`RATE_LIMITED`); en una ráfaga lenta, el `429` puede llegar tras las fichas que volvieron mientras duraba. Una
         clave ya válida pasa desde la IP frenada; desde el equipo, una desconocida sigue en `401`.
-  15.   (pasos 15.0–15.8) Catálogo de skills y conocimiento (grupo «catalogo», `dev/e2e_catalogo.py`): la API de
+  15.   (pasos 15.0–15.9) Catálogo de skills y conocimiento (grupo «catalogo», `dev/e2e_catalogo.py`): la API de
         administración de la webapp (`/api/v1/orgs/<org>/catalog/…`) lista y detalla skills y conocimiento, solo para
         ORG_ADMIN y PLATFORM_ADMIN; cambiar roles y desactivar una skill cambia quién lee por el MCP y qué retira el
         `sync` del plugin; `409` en edición concurrente; `/internal/*` del MCP no sale por Caddy; ninguna respuesta
-        lleva cuerpos de ficheros. Cada paso crea y elimina su organización (`cat-<ejecución>-…`). No mira dentro de
-        los contenedores.
+        lleva cuerpos de ficheros, salvo la `200` de la ruta de ficheros de una skill (15.9: el ORG_ADMIN lee el
+        contenido de un fichero, sin caché, y cada lectura correcta queda en la auditoría como `skill.file_read`;
+        USER `403`, traversal y `_acl.yaml` `422`, más de 256 KiB `413`, binario `415`). Cada paso crea y elimina su
+        organización (`cat-<ejecución>-…`). No mira dentro de los contenedores.
 
 Uso (pila de `deploy` con el proveedor falso: `scripts/dev-up.sh --fake-upstream`):
 
