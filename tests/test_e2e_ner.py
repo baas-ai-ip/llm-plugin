@@ -1,6 +1,6 @@
 """Grupo «ner» (15.x) de la prueba de punta a punta de H4 (`dev/e2e_ner.py` y el inspector de `dev/e2e_h4.py`).
 
-Los pasos 15.1–15.7 se ejecutan contra la pila real (la pila simulada de `dev/fake_h4_stack.py` no tiene NER); aquí se
+Los pasos 15.1–15.8 se ejecutan contra la pila real (la pila simulada de `dev/fake_h4_stack.py` no tiene NER); aquí se
 prueban las utilidades puras con las que deciden y las consultas que el inspector hace a los contenedores (con un
 motor de contenedores falso que anota sus argumentos). Con `unittest` (se ejecutan con `pytest` en la CI).
 """
@@ -231,6 +231,23 @@ class ObservedTest(unittest.TestCase):
         self.assertEqual(e2e_ner.hidden_problems(None), [])
 
 
+class AllowlistedTest(unittest.TestCase):
+    """15.8: un valor añadido a la *allowlist* desde W8 ya no está entre lo observado."""
+
+    def test_allowlisted_problems_empty_when_term_absent(self) -> None:
+        got = [{"token_type": "PERSON", "original_value": "Ana Gómez", "count": 1}]
+        self.assertEqual(e2e_ner.allowlisted_problems(got, "Telefónica"), [])
+
+    def test_allowlisted_problems_reports_term_case_insensitive(self) -> None:
+        got = [{"token_type": "ORG", "original_value": "Acme Corp", "count": 1}]
+        problems = e2e_ner.allowlisted_problems(got, "acme corp")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Acme Corp", problems[0])
+
+    def test_allowlisted_problems_none_observed_is_ok(self) -> None:
+        self.assertEqual(e2e_ner.allowlisted_problems(None, "Telefónica"), [])
+
+
 class LiveTestTest(unittest.TestCase):
     TEXT = "Hola, soy Ana Gómez, trabajo en Telefónica y vivo en Valencia."
 
@@ -413,10 +430,10 @@ class GroupWiringTest(unittest.TestCase):
         ns = e2e_h4.parse_args(["--only", "ner", "--inspect", "none"])
         e2e_h4.E2EH4(ns, inspector=None).run(Recorder())  # type: ignore[arg-type]
         self.assertEqual([n.split(" ")[0] for n in names if n.startswith("15.")],
-                         ["15.1", "15.2", "15.3", "15.6", "15.7"])  # fmt: skip
+                         ["15.1", "15.2", "15.3", "15.6", "15.7", "15.8"])  # fmt: skip
         names.clear()
         e2e_h4.E2EH4(ns, inspector=e2e_h4.MissingInspector("prueba")).run(Recorder())  # type: ignore[arg-type]
-        self.assertEqual([n.split(" ")[0] for n in names if n.startswith("15.")], [f"15.{i}" for i in range(1, 8)])
+        self.assertEqual([n.split(" ")[0] for n in names if n.startswith("15.")], [f"15.{i}" for i in range(1, 9)])
 
 
 if __name__ == "__main__":
