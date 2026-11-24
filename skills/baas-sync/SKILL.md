@@ -18,7 +18,7 @@ Trae al equipo las skills de la organización a la que está vinculado este proy
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" sync --project "${CLAUDE_PROJECT_DIR}"
    ```
 
-2. Resume al usuario, en pocas líneas, lo que dice la salida: skills nuevas (`+`), actualizadas (`~`) y retiradas (`-`), y cada línea `AVISO:` (dependencias a las que no tiene acceso, `settings.json` que no se pudo editar, etc.). **Si cambió algo**, la salida termina con «Ejecuta `/reload-plugins` o reinicia Claude Code»: díselo, y que las skills se invocan como `/<organización>:<skill>`. Sin cambios, basta con decir que todo está al día.
+2. Resume al usuario, en pocas líneas, lo que dice la salida: skills nuevas (`+`), actualizadas (`~`) y retiradas (`-`), y cada línea `AVISO:` (dependencias a las que no tiene acceso, `settings.json` que no se pudo editar, etc.). **Si cambió algo**, la salida termina pidiendo cerrar y volver a abrir Claude Code: díselo **siempre**, como paso obligatorio (`/reload-plugins` solo vale si el plugin de la organización ya estaba cargado; si es la primera vez o cambió el conjunto, hay que reiniciar), y que las skills se invocan como `/<organización>:<skill>`. Sin cambios, basta con decir que todo está al día.
 
 3. Según el código de salida y la marca entre corchetes:
 

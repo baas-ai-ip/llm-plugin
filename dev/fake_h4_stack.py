@@ -31,6 +31,18 @@ que el hito H4 añade (contrato §4, §5.2, §6 y §8; plan, tareas W2 a W5, P2,
   una ficha y, sin fichas, `429` con `Retry-After` en la forma de cada uno. Una clave válida no pasa por el limitador y
   una que existe (revocada) devuelve su ficha. El cliente es quien conecta: la pila simulada hace de Caddy, que
   sobrescribe el `X-Forwarded-For` que envía la petición.
+- **Informe de consumo** (`GET /api/v1/platform/usage`, contrato de la Fase 2 §7.3, grupo «consumo» del e2e): solo el
+  PLATFORM_ADMIN (`403` a los demás), `month` (con `422` si no es `YYYY-MM`) o `from`/`to`, y por organización los
+  turnos que el proxy simulado ha servido (peticiones, tokens que declara el proveedor y el bloque del anonimizador con
+  los turnos por modo, las sustituciones, la verificación y, con `ner`, las columnas de L2). No simula el disco, el
+  contenido ni el CSV: 16.2 y 16.3 del e2e se prueban contra la pila real.
+- **Informes de la Fase 2** (`dev/fake_consumo_reports.py`; 16.4 a 16.8 del e2e): el tráfico y el anonimizador globales
+  por organización, día y pareja organización-día (`/platform/usage/{traffic,anonymizer}`; contenido y disco, con la
+  forma y sin datos), el anonimizador de una organización por día y hora (JSON y CSV) con los permisos del §7.2, el
+  informe de tráfico de una organización (por día y por persona; el detalle por persona de un PLATFORM_ADMIN que no es
+  ORG_ADMIN de ella deja `usage.viewed`), `PATCH /orgs/{slug}` con la zona horaria y el filtro `org` de la auditoría.
+  Todo es UTC: cada turno lleva el instante en que se sirvió. Con `ner=True`, los turnos con AI-IP traen
+  `verification.l2`.
 - `FakeInspector`: lo que `ContainerInspector` mira dentro de los contenedores (vault, Redis, discos y MCP) y las
   peticiones del grupo «limite», que van a la pila simulada con el contenedor `fake-upstream` como cliente.
 
@@ -62,14 +74,17 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from email.message import Message
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import fake_consumo_reports as reports
 import fake_h3_stack as h3s
 from fake_baas import dev_api_key
 from fake_h3_stack import (
@@ -178,6 +193,15 @@ FAULTS = {
     "limit-global": "un solo cubo para todos los clientes: el equipo queda frenado con el contenedor",
     "limit-no-retry-after": "el 429 del límite no lleva Retry-After",
     "limit-shape": "el 429 del proxy no tiene la forma del proveedor (lleva la del MCP)",
+    # informe de consumo (Fase 2)
+    "consumo-absent": "la pila no trae el informe de consumo (T2–T3): GET /platform/usage es el de la Fase 4",
+    "consumo-mode-wrong": "el informe cuenta como anonimizados los turnos que salieron en observación",
+    "consumo-global-open": "las cuatro rutas globales de plataforma no exigen PLATFORM_ADMIN (un USER recibe 200)",
+    "consumo-global-wrong": "el tráfico global cuenta una petición de más en cada organización con tráfico",
+    "consumo-anonymizer-wrong": "el anonimizador de una organización no cuenta los turnos en observación por modo",
+    "consumo-anonymizer-open": "un USER puede ver el anonimizador de su organización (sin 403)",
+    "consumo-viewed-written": "las consultas globales y las del anonimizador de una organización escriben usage.viewed",
+    "consumo-l2-empty": "la pila trae el NER, pero el consumidor no cuenta verification.l2 (las l2_* salen a cero)",
 }
 
 
@@ -263,6 +287,8 @@ class Org:
     ai_ip: bool = False
     anonymizer: bool = True
     blocked: bool = False
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    timezone: str = "Europe/Madrid"
 
 
 @dataclass
@@ -393,9 +419,16 @@ def ws_frame(opcode: int, payload: bytes = b"") -> bytes:
 
 class StackState:
     def __init__(
-        self, faults: set[str], provider_url: str, *, auth_fail_burst: int = 30, auth_fail_per_minute: float = 10
+        self,
+        faults: set[str],
+        provider_url: str,
+        *,
+        auth_fail_burst: int = 30,
+        auth_fail_per_minute: float = 10,
+        ner: bool = False,
     ) -> None:
         self.faults = faults
+        self.ner = ner or "consumo-l2-empty" in faults  # el proxy emite verification.l2 (L2, NER)
         self.provider_url = provider_url
         self.proxy_url = self.app_url = ""
         self.lock = threading.RLock()
@@ -512,8 +545,9 @@ class StackState:
 
     # --- organizaciones ------------------------------------------------------------------------------
     def org_json(self, org: Org) -> dict[str, Any]:
-        return {"slug": org.slug, "name": org.name, "blocked": org.blocked, "paused": False,
-                "ai_ip_enabled": org.ai_ip, "anonymizer_enabled": org.anonymizer, "retention_days": 30}  # fmt: skip
+        return {"id": org.id, "slug": org.slug, "name": org.name, "timezone": org.timezone, "blocked": org.blocked,
+                "paused": False, "ai_ip_enabled": org.ai_ip, "anonymizer_enabled": org.anonymizer,
+                "retention_days": 30}  # fmt: skip
 
     def handshake(self, user: User) -> dict[str, Any]:
         orgs = []
@@ -783,11 +817,12 @@ class StackState:
         target = self.users_by_id.get(row["target_id"] or "") if row["action"] == "user.disabled" else None
         return bool(target and "audit-orgadmin-sees-disabled" in self.faults and admin_orgs & set(target.memberships))
 
-    def audit_items(self, viewer: User, action: str | None, limit: int) -> dict[str, Any]:
+    def audit_items(self, viewer: User, action: str | None, limit: int, org: str | None = None) -> dict[str, Any]:
         with self.lock:
             rows = [
                 r for r in reversed(self.audit)
                 if (not action or str(r["action"]).startswith(action)) and self.audit_visible(viewer, r)
+                and (not org or r["org_slug"] == org)
             ]  # fmt: skip
         return {"items": rows[:limit], "total": len(rows), "limit": limit, "offset": 0}
 
@@ -1029,11 +1064,26 @@ class StackState:
             if rid:
                 with self.lock:
                     self.response_ids[rid] = conv.id
-        verification = self._verification(mode, payload, request_counts, response_counts, body)
+        verification = self._verification(
+            mode, payload, request_counts, response_counts, body, last_user_text(api, payload)
+        )
         self._record(conv, mode, api, payload, sent, verification)
         return status, ctype, body
 
     def _verification(
+        self, mode: str, payload: dict[str, Any], req: dict[str, int], resp: dict[str, int], body: bytes, text: str = ""
+    ) -> Any:
+        verification = self._l1_verification(mode, payload, req, resp, body)
+        if verification is not None and self.ner:
+            # L2 (NER): lo que el proxy con el NER añade a `verification` (contrato de eventos §5.2), en observación
+            # y anonimizado: analiza lo que envía el cliente y detecta tres entidades si trae un nombre, una empresa…
+            verification["l2"] = {
+                "status": "OBSERVED", "enabled": True, "cause": None, "analyzed_bytes": len(text.encode()),
+                "cached_bytes": 0, "unanalyzed_bytes": 0, "observed": 3 if "Ana Gómez" in text else 0,
+            }  # fmt: skip
+        return verification
+
+    def _l1_verification(
         self, mode: str, payload: dict[str, Any], req: dict[str, int], resp: dict[str, int], body: bytes
     ) -> Any:
         if mode == "bypass":
@@ -1066,6 +1116,7 @@ class StackState:
                 "ai_ip": bool(conv.now_ai_ip), "anonymizer": bool(conv.now_anonymizer),
                 "verification_status": verification["status"] if verification else None,
                 "original": original, "request_sent": sent_text, "response_received": f"Eco: {sent_text}",
+                "at": datetime.now(timezone.utc),
             }  # fmt: skip
             conv.turns.append(turn)
             event = {"event_id": uuid.uuid4().hex, "conversation_id": conv.id, "request_original": original,
@@ -1088,6 +1139,123 @@ class StackState:
                     if "ws-silent" in self.faults and sub.user.platform_admin:
                         continue
                     sub.messages.put(json.dumps(message))
+
+    # --- webapp: informes de consumo (Fase 2) ----------------------------------------------------------------
+    def org_entries(self, slug: str) -> list[reports.Entry]:
+        """Los turnos que el proxy simulado ha servido de la organización, con el email de quien los envió."""
+        with self.lock:
+            return [(c.user.email, t) for c in self.convs.values() if c.org == slug for t in c.turns]
+
+    def scoped_orgs(self) -> dict[str, tuple[str, list[reports.Entry]]]:
+        with self.lock:
+            return {slug: (org.name, self.org_entries(slug)) for slug, org in self.orgs.items()}
+
+    def platform_usage(self, viewer: User, query: dict[str, list[str]]) -> tuple[int, dict[str, Any]]:
+        """`GET /platform/usage` (contrato de la Fase 2 §7.3), con lo que el proxy simulado ha servido en el rango
+        (cada turno, con los tokens que el proveedor falso declara: 12 y 9)."""
+        if not viewer.platform_admin:
+            return 403, {"error": "FORBIDDEN", "message": "Forbidden"}
+        month = (query.get("month") or [None])[0]
+        today = datetime.now(timezone.utc).date()
+        if month is not None:
+            if not re.fullmatch(r"20[0-9]{2}-(0[1-9]|1[0-2])", month) or "from" in query or "to" in query:
+                return 422, {"error": "VALIDATION_ERROR", "message": "month must be YYYY-MM (year 2000–2100)",
+                             "field": "month"}  # fmt: skip
+            first = date(int(month[:4]), int(month[5:]), 1)
+        else:
+            first = date.fromisoformat((query.get("from") or [today.replace(day=1).isoformat()])[0])
+        if month is None and "to" in query:
+            last = date.fromisoformat(query["to"][0])
+        else:
+            last = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        rows = []
+        with self.lock:
+            for org in self.orgs.values():
+                entries = reports.in_range(self.org_entries(org.slug), first, last)
+                row = reports.consumption_row(org.slug, org.name, org.blocked, entries, faults=self.faults)
+                rows.append({**row, "timezone": org.timezone})
+        rows.sort(key=lambda r: (-r["requests"], r["slug"]))
+        totals = {"orgs": len(rows), **{k: sum(r[k] for r in rows) for k in ("requests", "tokens_in", "tokens_out")}}
+        report: dict[str, Any] = {"tz": "UTC", "from": first.isoformat(), "to": last.isoformat(), "data_until": None,
+                                  "metrics_retention_months": 13, "totals": totals, "orgs": rows}  # fmt: skip
+        if "consumo-absent" in self.faults:  # el de la Fase 4: sin period ni data_until_by_source
+            return 200, report
+        report["period"] = {"month": month, "from": first.isoformat(), "to": last.isoformat(), "open": True}
+        report["data_until_by_source"] = {"traffic": None, "content": None, "storage": None}
+        return 200, report
+
+    def global_usage(self, viewer: User, kind: str, query: dict[str, list[str]]) -> tuple[int, dict[str, Any] | str]:
+        """`GET /platform/usage/{traffic,content,storage,anonymizer}` (contrato §7.4–§7.7): solo el PLATFORM_ADMIN
+        (los permisos van antes que la validación); `422` con `field` si un parámetro no vale. Con `format=csv`, `200`
+        y un CSV mínimo (la cabecera)."""
+        if not viewer.platform_admin and "consumo-global-open" not in self.faults:
+            return 403, {"error": "FORBIDDEN", "message": "Forbidden"}
+        parsed = reports.parse_range(query, groups=("org", "day", "org_day"), default="org")
+        if len(parsed) == 2:
+            return parsed  # type: ignore[return-value]
+        first, last, group_by = parsed
+        orgs = self.scoped_orgs()
+        if kind == "traffic":
+            data = reports.global_traffic(orgs, first, last, group_by, faults=self.faults)
+        elif kind == "anonymizer":
+            data = reports.global_anonymizer(orgs, first, last, group_by, faults=self.faults)
+        else:
+            data = reports.global_empty(kind, orgs, first, last, group_by)
+        if "consumo-viewed-written" in self.faults:
+            self.record("usage.viewed", viewer, target_type="usage_report", target_id=kind,
+                        metadata={"group_by": group_by, "format": "json", "users": 0})  # fmt: skip
+        if (query.get("format") or ["json"])[0] == "csv":
+            return 200, "key,label,org,day\r\n"
+        return 200, data
+
+    def org_usage(
+        self, viewer: User, slug: str, kind: str, query: dict[str, list[str]]
+    ) -> tuple[int, dict[str, Any] | str]:
+        """`GET /orgs/{slug}/usage/{traffic,anonymizer}` (Fase 4 §8.2 y contrato de la Fase 2 §7.2, §7.8): `404` si no
+        existe o es ajena, `403` a un USER, `422` con `field`. El detalle por persona de un PLATFORM_ADMIN que no es
+        ORG_ADMIN de la organización deja `usage.viewed`."""
+        with self.lock:
+            org = self.orgs.get(slug)
+            if org is None or not self.can_see_org(viewer, slug):
+                return 404, {"error": "NOT_FOUND", "message": "Organization not found"}
+            allowed = viewer.platform_admin or viewer.memberships.get(slug) == "ORG_ADMIN"
+            if not allowed and not (kind == "anonymizer" and "consumo-anonymizer-open" in self.faults):
+                return 403, {"error": "FORBIDDEN", "message": "Only an administrator of the organization can do this"}
+        groups = ("day", "hour") if kind == "anonymizer" else ("day", "hour", "weekday_hour", "user")
+        parsed = reports.parse_range(query, groups=groups, default="day")
+        if len(parsed) == 2:
+            return parsed  # type: ignore[return-value]
+        first, last, group_by = parsed
+        entries = self.org_entries(slug)
+        if kind == "anonymizer":
+            data = reports.org_anonymizer(slug, org.name, entries, first, last, group_by, faults=self.faults)
+            if "consumo-viewed-written" in self.faults:
+                self.record("usage.viewed", viewer, org=slug, target_type="usage_report", target_id="anonymizer",
+                            metadata={"group_by": group_by, "format": "json", "users": 0})  # fmt: skip
+            if (query.get("format") or ["json"])[0] == "csv":
+                return 200, reports.anonymizer_csv(data["series"])
+            return 200, data
+        if group_by == "user" and viewer.platform_admin and viewer.memberships.get(slug) != "ORG_ADMIN":
+            self.record("usage.viewed", viewer, org=slug, target_type="usage_report", target_id="traffic",
+                        metadata={"group_by": group_by, "format": "json", "users": 0})  # fmt: skip
+        return 200, reports.org_traffic(slug, org.name, entries, first, last, group_by)
+
+    def patch_org(self, viewer: User, slug: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """`PATCH /orgs/{slug}` con la zona horaria (Fase 4 §8.7): PLATFORM_ADMIN u ORG_ADMIN de la organización."""
+        with self.lock:
+            org = self.orgs.get(slug)
+            if org is None or not self.can_see_org(viewer, slug):
+                return 404, {"error": "NOT_FOUND", "message": "Organization not found"}
+            if not (viewer.platform_admin or viewer.memberships.get(slug) == "ORG_ADMIN"):
+                return 403, {"error": "FORBIDDEN", "message": "Forbidden"}
+            zone = body.get("timezone")
+            if zone is not None:
+                try:
+                    ZoneInfo(str(zone))
+                except (ValueError, ZoneInfoNotFoundError):
+                    return 422, {"error": "VALIDATION_ERROR", "message": "Unknown time zone", "field": "timezone"}
+                org.timezone = str(zone)
+            return 200, {"organization": self.org_json(org), "propagated": True}
 
     # --- webapp: conversaciones --------------------------------------------------------------------------------
     def conv_json(self, conv: Conv, viewer: User) -> dict[str, Any]:
@@ -1314,6 +1482,8 @@ def proxy_handler(state: StackState) -> type[BaseHTTPRequestHandler]:
 _ORG = re.compile(r"/api/v1/orgs/([a-z0-9-]+)")
 _ORG_SUB = re.compile(r"/api/v1/orgs/([a-z0-9-]+)/(anonymizer|block|ai-ip|members|delete)")
 _ORG_GET = re.compile(r"/api/v1/orgs/([a-z0-9-]+)/(members|delete-preview)")
+_PLATFORM_USAGE = re.compile(r"/api/v1/platform/usage/(traffic|content|storage|anonymizer)")
+_ORG_USAGE = re.compile(r"/api/v1/orgs/([a-z0-9-]+)/usage/(traffic|anonymizer)")
 _ACTIVATION = re.compile(r"/api/v1/auth/activation/([A-Za-z0-9_-]+)(/password)?")
 _CONV = re.compile(r"/api/v1/conversations/([0-9a-f-]+)")
 _TURN = re.compile(r"/api/v1/conversations/([0-9a-f-]+)/turns/(\d+)")
@@ -1353,6 +1523,12 @@ def webapp_handler(state: StackState) -> type[BaseHTTPRequestHandler]:
                 return self._json(200, state.me_json(viewer))
             if url.path == "/api/v1/api-keys":
                 return self._json(200, {"items": [state.key_json(k, viewer) for k in viewer.keys]})
+            if url.path == "/api/v1/platform/usage":
+                return self._json(*state.platform_usage(viewer, parse_qs(url.query)))
+            if m := _PLATFORM_USAGE.fullmatch(url.path):
+                return self._usage_reply(*state.global_usage(viewer, m.group(1), parse_qs(url.query)))
+            if m := _ORG_USAGE.fullmatch(url.path):
+                return self._usage_reply(*state.org_usage(viewer, m.group(1), m.group(2), parse_qs(url.query)))
             if m := _ORG_GET.fullmatch(url.path):
                 slug = m.group(1)
                 if m.group(2) == "delete-preview":
@@ -1376,7 +1552,11 @@ def webapp_handler(state: StackState) -> type[BaseHTTPRequestHandler]:
                     )
                 query = parse_qs(url.query)
                 action = (query.get("action") or [None])[0]
-                return self._json(200, state.audit_items(viewer, action, int((query.get("limit") or ["50"])[0])))
+                org = (query.get("org") or [None])[0]
+                if org and (org not in state.orgs or not state.can_see_org(viewer, org)):
+                    return self._json(404, {"error": "NOT_FOUND", "message": "Organization not found"})
+                limit = min(int((query.get("limit") or ["50"])[0]), 200)
+                return self._json(200, state.audit_items(viewer, action, limit, org))
             if url.path == "/api/v1/conversations":
                 query = parse_qs(url.query)
                 org = (query.get("org") or [None])[0]
@@ -1458,6 +1638,28 @@ def webapp_handler(state: StackState) -> type[BaseHTTPRequestHandler]:
                 return self._json(*state.invite(viewer, slug, body))
             return self._json(404, {"error": "NOT_FOUND", "message": "Not found"})
 
+        def _usage_reply(self, status: int, data: Any) -> None:
+            if isinstance(data, str):  # un CSV
+                return self._send(
+                    status,
+                    "text/csv; charset=utf-8",
+                    data.encode(),
+                    {"Content-Disposition": 'attachment; filename="informe.csv"'},
+                )
+            return self._json(status, data)
+
+        def do_PATCH(self) -> None:
+            raw = self._read()
+            if self.headers.get("X-Requested-With") != "baas-webapp":
+                return self._json(403, _CSRF)
+            viewer = self._viewer()
+            if viewer is None:
+                return self._json(401, {"error": "UNAUTHENTICATED", "message": "Not authenticated"})
+            m = _ORG.fullmatch(self.path)
+            if m is None:
+                return self._json(404, {"error": "NOT_FOUND", "message": "Not found"})
+            return self._json(*state.patch_org(viewer, m.group(1), json.loads(raw or b"{}")))
+
         def do_PUT(self) -> None:
             raw = self._read()
             if self.headers.get("X-Requested-With") != "baas-webapp":
@@ -1516,11 +1718,12 @@ def webapp_handler(state: StackState) -> type[BaseHTTPRequestHandler]:
 
 class FakeH4Stack:
     """Las tres piezas en puertos efímeros de `host`. `faults` ⊆ `FAULTS`; `debug_body` = `json` o `text`;
-    `auth_fail_burst` y `auth_fail_per_minute`, el límite de claves no válidas (H4-13) del proxy y del MCP."""
+    `auth_fail_burst` y `auth_fail_per_minute`, el límite de claves no válidas (H4-13) del proxy y del MCP; `ner`, un
+    proxy con el NER (L2): los turnos con AI-IP traen `verification.l2`."""
 
     def __init__(
         self, faults: Any = (), *, debug_body: str = "json", host: str = "127.0.0.1", auth_fail_burst: int = 30,
-        auth_fail_per_minute: float = 10,
+        auth_fail_per_minute: float = 10, ner: bool = False,
     ) -> None:  # fmt: skip
         chosen = set(faults)
         unknown = chosen - FAULTS.keys()
@@ -1529,7 +1732,7 @@ class FakeH4Stack:
         self.provider = EchoProvider(debug_body)
         self._servers = [_Server(provider_handler(self.provider), host)]
         self.state = StackState(chosen, self._servers[0].url, auth_fail_burst=auth_fail_burst,
-                                auth_fail_per_minute=auth_fail_per_minute)  # fmt: skip
+                                auth_fail_per_minute=auth_fail_per_minute, ner=ner)  # fmt: skip
         self._servers += [_Server(proxy_handler(self.state), host), _Server(webapp_handler(self.state), host)]
         self.state.proxy_url, self.state.app_url = self._servers[1].url, self._servers[2].url
         self.inspector = FakeInspector(self.state)

@@ -1,37 +1,37 @@
-"""Grupo «catalogo» (pasos 15.0–15.10) de `dev/e2e_h4.py`: el catálogo de administración de skills y conocimiento.
+"""Grupo «catalogo» (pasos 17.0–17.10) de `dev/e2e_h4.py`: el catálogo de administración de skills y conocimiento.
 
 Un paso por criterio de aceptación del contrato (`contrato-catalogo-admin.md`, §9 y §10) contra la pila real:
 
-  15.0  la pila tiene la API del catálogo (`GET /api/v1/orgs/<org>/catalog/skills`); si no, falla con un mensaje
+  17.0  la pila tiene la API del catálogo (`GET /api/v1/orgs/<org>/catalog/skills`); si no, falla con un mensaje
         claro y se **saltan** los demás pasos.
-  15.1  un ORG_ADMIN lista skills y conocimiento y los ve todos, aunque no tenga esos roles.
-  15.2  ficha de una skill: roles y su origen, dependencias (con existencia, estado y roles), «usada por» e
+  17.1  un ORG_ADMIN lista skills y conocimiento y los ve todos, aunque no tenga esos roles.
+  17.2  ficha de una skill: roles y su origen, dependencias (con existencia, estado y roles), «usada por» e
         invocaciones; ficha de un documento con «usada por».
-  15.3  un USER recibe `403` en todas las rutas; sin sesión `401`; el ORG_ADMIN de otra organización, `404`.
-  15.4  `PUT` de roles de una skill (sin `baas.yaml` previo) y de un documento: cambia quién lee con `baas_get_skill`
+  17.3  un USER recibe `403` en todas las rutas; sin sesión `401`; el ORG_ADMIN de otra organización, `404`.
+  17.4  `PUT` de roles de una skill (sin `baas.yaml` previo) y de un documento: cambia quién lee con `baas_get_skill`
         y `baas_read_document`; el cuerpo del documento queda intacto; roles inexistentes → `422 INVALID_ROLES`.
-  15.5  edición concurrente: dos `PUT` con el mismo `expected_sha256` → el segundo da `409` y no pisa nada.
-  15.6  `GET <mcp>/internal/v1/orgs/<org>/skills` por Caddy → `404`, también con el token interno y con variantes
+  17.5  edición concurrente: dos `PUT` con el mismo `expected_sha256` → el segundo da `409` y no pisa nada.
+  17.6  `GET <mcp>/internal/v1/orgs/<org>/skills` por Caddy → `404`, también con el token interno y con variantes
         codificadas (`%2e%2e`, barras, mayúsculas): nunca `200` ni datos.
-  15.7  ninguna respuesta (de la API del catálogo ni de Caddy) contiene el cuerpo de un fichero, salvo las `200` de
+  17.7  ninguna respuesta (de la API del catálogo ni de Caddy) contiene el cuerpo de un fichero, salvo las `200` de
         las dos rutas de contenido, que lo llevan a propósito: la de ficheros de una skill
         (`…/skills/<nombre>/files/<ruta>`, §3.4) y la de un documento de conocimiento
         (`…/knowledge-content/<ruta>`, §3.5); los errores de ambas (`403`, `404`, `413`, `415`, `422`) sí se escanean.
-  15.8  desactivar una skill: el USER recibe `NOT_FOUND` y no la ve en el listado, el administrador sí («deprecated»),
+  17.8  desactivar una skill: el USER recibe `NOT_FOUND` y no la ve en el listado, el administrador sí («deprecated»),
         el `sync` del plugin la retira del disco, y al reactivarla vuelve (con sus roles).
-  15.9  leer el contenido de un fichero de una skill (§3.4): el ORG_ADMIN abre `SKILL.md` y un script y recibe lo que
+  17.9  leer el contenido de un fichero de una skill (§3.4): el ORG_ADMIN abre `SKILL.md` y un script y recibe lo que
         se escribió (con `size` y `sha256` del disco y sin caché); USER `403`, sin sesión `401`, otra organización
         `404`, traversal y `_acl.yaml` `422`, más de 256 KiB `413`, binario `415`; una fila `skill.file_read` por
         lectura correcta (visible para el ORG_ADMIN) y ninguna por los fallos, sin el contenido.
-  15.10 leer el contenido de un documento de conocimiento (§3.5): el ORG_ADMIN abre un `.md` y un `.sql` (en forma
+  17.10 leer el contenido de un documento de conocimiento (§3.5): el ORG_ADMIN abre un `.md` y un `.sql` (en forma
         corta y completa: la misma ruta canónica) y recibe lo que se escribió (con `size` y `sha256` del disco y sin
         caché); USER `403`, sin sesión `401`, otra organización `404`, traversal, la raíz y `_acl.yaml` `422`, más de
         256 KiB `413`, binario `415`, un nombre con tildes (NFC) se abre; una fila `knowledge.file_read` por lectura
         correcta (visible para el ORG_ADMIN) y ninguna por los fallos, sin el contenido.
 
-Orden: 15.7 → 15.9 → 15.10. 15.9 y 15.10 guardan en `self.seen` sus `200` con contenido (exentas del escaneo, como las
-de 15.7); por eso la comprobación de 15.7 «exactamente dos respuestas exentas» cuenta solo las que él mismo provoca
-(desde el principio del paso) y no las de todo `self.seen`: si no, ejecutar antes 15.9 o 15.10 la haría fallar.
+Orden: 17.7 → 17.9 → 17.10. 17.9 y 17.10 guardan en `self.seen` sus `200` con contenido (exentas del escaneo, como las
+de 17.7); por eso la comprobación de 17.7 «exactamente dos respuestas exentas» cuenta solo las que él mismo provoca
+(desde el principio del paso) y no las de todo `self.seen`: si no, ejecutar antes 17.9 o 17.10 la haría fallar.
 
 Cada paso crea su organización (`cat-<ejecución>-<paso>`, con usuarios de la semilla de desarrollo como miembros, un
 rol funcional `ventas` para el USER y otro, `soporte`, para quitárselo) y la elimina al terminar. Ningún paso mira
@@ -80,9 +80,9 @@ MAX_FILE_VIEW_BYTES = 262144  # tope de la lectura de un fichero de skill (contr
 # consulta ni de fragmentos: la ruta es la que se pide, no una que lleve esos textos dentro).
 FILES_ROUTE = re.compile(r"skills/[^/?#\s]+/files/[^?#\s]+")
 KNOWLEDGE_ROUTE = re.compile(r"knowledge-content/[^?#\s]+")
-# Ficheros que 15.7 y 15.9 añaden a `base` (ruta dentro de la skill)
+# Ficheros que 17.7 y 17.9 añaden a `base` (ruta dentro de la skill)
 BIG, BINARY, LIMIT, NESTED_ACL = "scripts/grande.txt", "scripts/binario.bin", "scripts/limite.txt", "scripts/_acl.yaml"
-# Documentos que 15.7 y 15.10 añaden a `knowledge/ventas/` (ruta completa)
+# Documentos que 17.7 y 17.10 añaden a `knowledge/ventas/` (ruta completa)
 K_SQL = "knowledge/ventas/consulta.sql"
 K_ACCENT = unicodedata.normalize("NFC", "knowledge/ventas/guía-ñandú.md")
 K_BIG, K_LIMIT, K_BINARY = "knowledge/ventas/grande.txt", "knowledge/ventas/limite.txt", "knowledge/ventas/binario.bin"
@@ -124,7 +124,7 @@ def body_problems(label: str, raw: bytes, sentinels: dict[str, str]) -> list[str
 
 
 def catalog_api_problem(status: int, body: Any) -> str | None:
-    """15.0: qué decir si `GET …/catalog/skills` (como PLATFORM_ADMIN, de una organización que existe) no da 200."""
+    """17.0: qué decir si `GET …/catalog/skills` (como PLATFORM_ADMIN, de una organización que existe) no da 200."""
     if status == 200:
         return None
     if status == 404:
@@ -142,7 +142,7 @@ def catalog_api_problem(status: int, body: Any) -> str | None:
 
 
 def internal_paths(org: str) -> list[str]:
-    """Rutas con las que alguien intentaría llegar a `/internal/v1` del MCP por el sitio público (15.6): la buena y
+    """Rutas con las que alguien intentaría llegar a `/internal/v1` del MCP por el sitio público (17.6): la buena y
     variantes de mayúsculas, barras, puntos y codificación."""
     skills = f"v1/orgs/{org}/skills"
     return [
@@ -168,7 +168,7 @@ def internal_paths(org: str) -> list[str]:
 
 
 def leak_problems(path: str, res: Http, with_token: bool) -> list[str]:
-    """15.6: lo que no puede contestar Caddy a una ruta interna: `200`, datos del catálogo o ficheros del equipo."""
+    """17.6: lo que no puede contestar Caddy a una ruta interna: `200`, datos del catálogo o ficheros del equipo."""
     how = "con el token interno" if with_token else "sin token"
     text = res.body.decode(errors="replace")
     problems = []
@@ -189,7 +189,7 @@ class Seen(NamedTuple):
 
 
 def is_file_content(method: str, path: str, status: int) -> bool:
-    """15.7: ¿es la respuesta una `200` de una de las dos rutas de contenido (`GET skills/<nombre>/files/<ruta>` o
+    """17.7: ¿es la respuesta una `200` de una de las dos rutas de contenido (`GET skills/<nombre>/files/<ruta>` o
     `GET knowledge-content/<ruta>`, ambas relativas a `…/catalog/`)? Es lo único que puede llevar un cuerpo; un error de
     esas mismas rutas, no."""
     if method != "GET" or status != 200:
@@ -198,7 +198,7 @@ def is_file_content(method: str, path: str, status: int) -> bool:
 
 
 def scan_seen(seen: list[Seen], sentinels: dict[str, str]) -> list[str]:
-    """15.7: los problemas de todas las respuestas recogidas, salvo las que llevan un cuerpo a propósito."""
+    """17.7: los problemas de todas las respuestas recogidas, salvo las que llevan un cuerpo a propósito."""
     problems: list[str] = []
     for item in seen:
         if not item.content_expected:
@@ -215,7 +215,7 @@ def header_value(res: Http, name: str) -> str | None:
 
 
 def no_store_problems(label: str, res: Http) -> list[str]:
-    """15.9: la `200` con el contenido de un fichero no se guarda en caché (`Cache-Control: no-store`, `Pragma: no-cache`)."""
+    """17.9: la `200` con el contenido de un fichero no se guarda en caché (`Cache-Control: no-store`, `Pragma: no-cache`)."""
     problems = []
     cache = header_value(res, "Cache-Control") or ""
     if "no-store" not in [d.strip().lower() for d in cache.split(",")]:
@@ -241,6 +241,8 @@ def sized_text(head: str, size: int) -> bytes:
 class CatalogoGroup(e2e_uso.UsoGroup):
     """Reutiliza de `uso` la creación de organizaciones de cada paso, las sesiones y los clientes del MCP."""
 
+    slug_prefix = "cat"  # `<prefijo>-<ejecución>-<paso>`, como lo usa `UsoGroup.create_org` (y `consumo`, con el suyo)
+
     def __init__(self, e2e: E2EH4) -> None:
         super().__init__(e2e)
         self.sentinels = {
@@ -250,7 +252,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "grande": f"CATALOGO-CUERPO-GRANDE-{self.nonce}",
             "binario": f"CATALOGO-CUERPO-BINARIO-{self.nonce}",
             "limite": f"CATALOGO-CUERPO-LIMITE-{self.nonce}",
-            # los documentos de conocimiento que añaden 15.7 y 15.10 (el `.md` de siempre lleva «documento»)
+            # los documentos de conocimiento que añaden 17.7 y 17.10 (el `.md` de siempre lleva «documento»)
             "doc-sql": f"CATALOGO-CUERPO-DOC-SQL-{self.nonce}",
             "doc-acento": f"CATALOGO-CUERPO-DOC-ACENTO-{self.nonce}",
             "doc-grande": f"CATALOGO-CUERPO-DOC-GRANDE-{self.nonce}",
@@ -262,10 +264,10 @@ class CatalogoGroup(e2e_uso.UsoGroup):
         self.internal_token = getattr(e2e.args, "internal_token", INTERNAL_TOKEN)
 
     # --- organizaciones y escenario -----------------------------------------------------------------
-    def create_org(self, label: str, members: dict[str, str]) -> e2e_uso.UsoOrg:  # type: ignore[override]
+    def create_org(self, label: str, members: dict[str, str], name: str | None = None) -> e2e_uso.UsoOrg:
         """Como la de `uso`, pero con el prefijo `cat-` y los roles funcionales `ventas` (del USER) y `soporte`."""
-        slug = f"cat-{self.nonce}-{label}"
-        res = self.e.admin_post("/api/v1/orgs", {"slug": slug, "name": f"E2E catalogo {label} {self.nonce}"})
+        slug = f"{self.slug_prefix}-{self.nonce}-{label}"
+        res = self.e.admin_post("/api/v1/orgs", {"slug": slug, "name": name or f"E2E catalogo {label} {self.nonce}"})
         check(res.status == 201, f"POST /api/v1/orgs ({slug}) → {e2e_uso.describe(res)}")
         data = (res.json() or {}).get("organization") or {}
         org = e2e_uso.UsoOrg(
@@ -340,7 +342,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
         return f"print('{self.sentinels['script']}')\n"
 
     def view_files(self) -> dict[str, bytes]:
-        """Lo que 15.7 y 15.9 añaden a `base` (ruta dentro de la skill → bytes): un fichero que pasa del tope por un byte,
+        """Lo que 17.7 y 17.9 añaden a `base` (ruta dentro de la skill → bytes): un fichero que pasa del tope por un byte,
         otro que lo alcanza justo, un binario (con NUL y bytes que no son UTF-8, y un centinela por si se filtra) y un
         `_acl.yaml` de subcarpeta (forma parte del paquete, pero no se abre)."""
         s = self.sentinels
@@ -373,7 +375,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             self.call(client, "baas_write_document", {"path": path, "content": self.doc_text(text)})
 
     def view_docs(self) -> dict[str, bytes]:
-        """Lo que 15.7 y 15.10 añaden a `knowledge/ventas/` (ruta completa → bytes): un `.sql`, un `.md` con tildes en el
+        """Lo que 17.7 y 17.10 añaden a `knowledge/ventas/` (ruta completa → bytes): un `.sql`, un `.md` con tildes en el
         nombre (NFC), un documento que pasa del tope por un byte, otro que lo alcanza justo, un binario (con NUL y bytes
         que no son UTF-8, y un centinela por si se filtra) y un `_acl.yaml` de subcarpeta (no se abre)."""
         s = self.sentinels
@@ -398,7 +400,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
 
     # --- la API del catálogo -------------------------------------------------------------------------
     def api(self, method: str, org: e2e_uso.UsoOrg | str, path: str, who: str | None, payload: Any = None) -> Http:
-        """Una petición a la API del catálogo como `who` (`None`: sin sesión); se guarda su respuesta para 15.7."""
+        """Una petición a la API del catálogo como `who` (`None`: sin sesión); se guarda su respuesta para 17.7."""
         slug = org if isinstance(org, str) else org.slug
         url = f"/api/v1/orgs/{slug}/catalog/{path}"
         if who is None:
@@ -464,7 +466,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             raise StepError(f"{tool}: {type(exc).__name__}: {exc}") from None
         raise StepError(f"{tool} {args} funcionó y debía fallar")
 
-    # --- 15.0 la pila tiene la API --------------------------------------------------------------------
+    # --- 17.0 la pila tiene la API --------------------------------------------------------------------
     def stack_has_api(self) -> str:
         res = self.e.webapp("GET", f"/api/v1/orgs/{META_ORG}/catalog/skills", self.admin)
         why = catalog_api_problem(res.status, res.json())
@@ -474,7 +476,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"GET /api/v1/orgs/{META_ORG}/catalog/skills → 200 ({count} skills de la organización meta; la API existe)"
         )
 
-    # --- 15.1 listados ----------------------------------------------------------------------------------
+    # --- 17.1 listados ----------------------------------------------------------------------------------
     def listing(self) -> str:
         with self.scenario("li") as org:
             skills = self.skill_names(org)
@@ -508,7 +510,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"{len(docs)} documento con sus roles; el PLATFORM_ADMIN lo mismo"
         )
 
-    # --- 15.2 fichas ------------------------------------------------------------------------------------
+    # --- 17.2 fichas ------------------------------------------------------------------------------------
     def details(self) -> str:
         with self.scenario("de") as org:
             detail = self.skill_detail(org, REPORT)
@@ -571,7 +573,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"que no existe; «{BASE}» y {DOC} dicen «usada por» {REPORT}; usage 0 invocaciones; skill inexistente → 404"
         )
 
-    # --- 15.3 permisos ------------------------------------------------------------------------------------
+    # --- 17.3 permisos ------------------------------------------------------------------------------------
     def permissions(self) -> str:
         with self.scenario("pe") as org:
             routes = [
@@ -614,7 +616,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "organización inexistente → 404; nada cambió"
         )
 
-    # --- 15.4 cambiar roles ---------------------------------------------------------------------------------
+    # --- 17.4 cambiar roles ---------------------------------------------------------------------------------
     def change_roles(self) -> str:
         with self.scenario("ro") as org:
             s = self.sentinels
@@ -709,7 +711,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             f"otros → 422 INVALID_ROLES (field roles); {DOC} igual con el cuerpo byte a byte intacto"
         )
 
-    # --- 15.5 edición concurrente ----------------------------------------------------------------------------
+    # --- 17.5 edición concurrente ----------------------------------------------------------------------------
     def conflict(self) -> str:
         with self.scenario("co") as org:
             detail = self.skill_detail(org, REPORT)
@@ -750,7 +752,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "documento y estado con huella vieja → 409; nada pisado"
         )
 
-    # --- 15.6 Caddy bloquea /internal ------------------------------------------------------------------------------
+    # --- 17.6 Caddy bloquea /internal ------------------------------------------------------------------------------
     def caddy_blocks(self) -> str:
         with self.scenario("ca") as org:
             parts = urlsplit(str(org.bindings[self.org_admin]["mcp_url"]))
@@ -772,17 +774,17 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                     res = h3.http("GET", f"{origin}{path}", headers=headers, timeout=self.a.timeout)
                     self.seen.append(Seen(f"GET {origin}{path} (token={with_token})", res.body))
                     problems += leak_problems(path, res, with_token)
-            # y la API interna sí responde dentro de la red: lo prueba la webapp (15.1); aquí solo se mira desde fuera
+            # y la API interna sí responde dentro de la red: lo prueba la webapp (17.1); aquí solo se mira desde fuera
             check(not problems, f"/internal/* de {origin} no está bloqueado:\n" + "\n".join(problems))
         return (
             f"GET {origin}/internal/v1/orgs/<org>/skills → 404 (sin token y con el token interno); además {len(paths)} variantes "
             "(mayúsculas, %69, %2F, %2e%2e, //, /./, /mcp/../, ficheros del equipo), con y sin token: ninguna 200 ni con datos"
         )
 
-    # --- 15.7 ninguna respuesta lleva cuerpos ------------------------------------------------------------------------
+    # --- 17.7 ninguna respuesta lleva cuerpos ------------------------------------------------------------------------
     def no_bodies(self) -> str:
         with self.scenario("cu") as org:
-            start = len(self.seen)  # 15.9 y 15.10 también guardan 200 exentas: aquí solo se cuentan las de este paso
+            start = len(self.seen)  # 17.9 y 17.10 también guardan 200 exentas: aquí solo se cuentan las de este paso
             requests = [("skills", None)] + [(f"skills/{n}", None) for n in (BASE, REPORT)]
             requests += [("knowledge", None), (f"knowledge/{self.short(DOC)}", None)]
             for path, _ in requests:
@@ -883,7 +885,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "del MCP y las dos 200 sí llevan el centinela"
         )
 
-    # --- 15.9 contenido de un fichero de una skill ---------------------------------------------------------------------
+    # --- 17.9 contenido de un fichero de una skill ---------------------------------------------------------------------
     def files_get(self, org: e2e_uso.UsoOrg | str, path: str, who: str | None, skill: str = BASE) -> Http:
         """`GET …/catalog/skills/<skill>/files/<path>` (la ruta tal cual: no se codifica ni normaliza)."""
         return self.api("GET", org, f"skills/{skill}/files/{path}", who)
@@ -1046,7 +1048,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             leaks = body_problems("auditoría (PLATFORM_ADMIN)", raw_platform, s)
             leaks += body_problems("auditoría (ORG_ADMIN)", raw_org, s)
             check(not leaks, "el contenido aparece en la auditoría:\n" + "\n".join(leaks[:10]))
-            # los errores de la ruta de ficheros no llevan cuerpos (15.7 los escanea igual)
+            # los errores de la ruta de ficheros no llevan cuerpos (17.7 los escanea igual)
             problems = scan_seen(self.seen[start:], s)
             check(not problems, "respuestas de errores con cuerpos de ficheros:\n" + "\n".join(problems[:10]))
         return (
@@ -1059,7 +1061,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "sha256 y size, sin contenido), visibles para el ORG_ADMIN"
         )
 
-    # --- 15.10 contenido de un documento de conocimiento -----------------------------------------------------------------
+    # --- 17.10 contenido de un documento de conocimiento -----------------------------------------------------------------
     def knowledge_read_rows(self, org: e2e_uso.UsoOrg, who: str) -> tuple[list[dict[str, Any]], bytes]:
         """TODAS las filas `knowledge.file_read` de la auditoría de `org` que ve `who` (sea cual sea su `target_id`; y la
         respuesta cruda, para escanearla)."""
@@ -1265,7 +1267,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
                 body_problems("auditoría simulada", tainted.encode(), s),
                 "control positivo: el escáner no ve el centinela en una auditoría que lo llevase",
             )
-            # los errores de la ruta no llevan cuerpos (15.7 los escanea igual)
+            # los errores de la ruta no llevan cuerpos (17.7 los escanea igual)
             problems = scan_seen(self.seen[start:], s)
             check(not problems, "respuestas de errores con cuerpos de documentos:\n" + "\n".join(problems[:10]))
         return (
@@ -1279,7 +1281,7 @@ class CatalogoGroup(e2e_uso.UsoGroup):
             "size, sin contenido), visibles para el ORG_ADMIN"
         )
 
-    # --- 15.8 desactivar y reactivar -----------------------------------------------------------------------------------
+    # --- 17.8 desactivar y reactivar -----------------------------------------------------------------------------------
     def disable(self) -> str:
         with self.scenario("de2") as org, tempfile.TemporaryDirectory(prefix="e2e-catalogo-") as tmp:
             root = Path(tmp)
@@ -1411,34 +1413,34 @@ class CatalogoGroup(e2e_uso.UsoGroup):
     # --- el recorrido ------------------------------------------------------------------------------------------------------
     def register(self, runner: Runner, base: list[str]) -> None:
         step = runner.step
-        ready = "15.0 la pila tiene la API del catálogo"
+        ready = "17.0 la pila tiene la API del catálogo"
         step(ready, self.stack_has_api, needs=base)
         base = [*base, ready]
         step(
-            "15.1 ORG_ADMIN lista skills y conocimiento (ve todo, aunque no tenga esos roles)", self.listing, needs=base
+            "17.1 ORG_ADMIN lista skills y conocimiento (ve todo, aunque no tenga esos roles)", self.listing, needs=base
         )
-        step("15.2 ficha de una skill con dependencias y «usada por»", self.details, needs=base)
-        step("15.3 USER recibe 403 (sin sesión 401, otra organización 404)", self.permissions, needs=base)
-        step("15.4 PUT de roles cambia quién lee con baas_get_skill (skill y documento)", self.change_roles, needs=base)
-        step("15.5 409 en edición concurrente (dos PUT con el mismo expected_sha256)", self.conflict, needs=base)
-        step("15.6 GET mcp.<dominio>/internal/v1/orgs/<org>/skills → 404 por Caddy", self.caddy_blocks, needs=base)
+        step("17.2 ficha de una skill con dependencias y «usada por»", self.details, needs=base)
+        step("17.3 USER recibe 403 (sin sesión 401, otra organización 404)", self.permissions, needs=base)
+        step("17.4 PUT de roles cambia quién lee con baas_get_skill (skill y documento)", self.change_roles, needs=base)
+        step("17.5 409 en edición concurrente (dos PUT con el mismo expected_sha256)", self.conflict, needs=base)
+        step("17.6 GET mcp.<dominio>/internal/v1/orgs/<org>/skills → 404 por Caddy", self.caddy_blocks, needs=base)
         step(
-            "15.7 ninguna respuesta contiene cuerpos de ficheros (salvo la 200 de las rutas de contenido de una skill y de un documento)",
+            "17.7 ninguna respuesta contiene cuerpos de ficheros (salvo la 200 de las rutas de contenido de una skill y de un documento)",
             self.no_bodies,
             needs=base,
         )
         step(
-            "15.8 desactivar una skill: NOT_FOUND al USER, el administrador la ve, sync la retira; reactivar la devuelve",
+            "17.8 desactivar una skill: NOT_FOUND al USER, el administrador la ve, sync la retira; reactivar la devuelve",
             self.disable,
             needs=base,
         )
         step(
-            "15.9 contenido de un fichero de una skill: ORG_ADMIN lo lee (auditado), USER 403, traversal 422, grande 413, binario 415",
+            "17.9 contenido de un fichero de una skill: ORG_ADMIN lo lee (auditado), USER 403, traversal 422, grande 413, binario 415",
             self.file_read,
             needs=base,
         )
         step(
-            "15.10 contenido de un documento de conocimiento: ORG_ADMIN lo lee (auditado), USER 403, traversal 422, grande 413, binario 415",
+            "17.10 contenido de un documento de conocimiento: ORG_ADMIN lo lee (auditado), USER 403, traversal 422, grande 413, binario 415",
             self.knowledge_read,
             needs=base,
         )

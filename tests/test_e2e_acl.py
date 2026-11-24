@@ -206,7 +206,8 @@ class RedisAsTest(unittest.TestCase):
 
 class GroupWiringTest(unittest.TestCase):
     def test_acl_goes_before_limite_and_needs_the_inspector(self) -> None:
-        self.assertEqual(e2e_h4.GROUPS[-2:], ("acl", "limite"), "los pasos 13.x y después los 14.x")
+        groups = e2e_h4.GROUPS
+        self.assertEqual(groups.index("limite"), groups.index("acl") + 1, "los pasos 13.x y después los 14.x")
         self.assertIn("acl", e2e_h4.parse_args([]).only)
         self.assertEqual(e2e_acl.CLIENT_NAME, "e2e-acl")
         ns = e2e_h4.parse_args(["--only", "acl", "--inspect", "none"])

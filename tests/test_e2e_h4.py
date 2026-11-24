@@ -309,7 +309,19 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual((ns.admin_email, ns.orgadmin_email), ("admin@baas.test", "orgadmin@demo.test"))
         self.assertEqual(
             ns.only,
-            ["observacion", "interruptor", "eliminar", "originales", "huerfanos", "uso", "catalogo", "acl", "limite"],
+            [
+                "observacion",
+                "interruptor",
+                "eliminar",
+                "originales",
+                "huerfanos",
+                "uso",
+                "acl",
+                "limite",
+                "ner",
+                "consumo",
+                "catalogo",
+            ],
         )
         self.assertEqual((ns.auth_fail_burst, ns.auth_fail_per_minute), (30, 10.0), "los valores del contrato §7.5")
         self.assertEqual((ns.anon_org, ns.anon_email), ("privada", "analista@privada.test"))
@@ -325,6 +337,33 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual((ns.app_url, ns.fake_url), ("http://a:1", "http://f:2"))
         self.assertEqual((ns.only, ns.apis, ns.inspect), (["eliminar"], ["chat"], "none"))
         self.assertEqual((ns.propagation_wait, ns.trace_timeout), (0.2, 5.0))
+
+    def test_consumo_group_is_registered_in_groups_and_only_help(self) -> None:
+        self.assertIn("consumo", e2e_h4.GROUPS)
+        groups = e2e_h4.GROUPS
+        self.assertEqual(groups.index("consumo"), groups.index("ner") + 1, "los pasos 16.x van tras los 15.x de «ner»")
+        self.assertIn("consumo", e2e_h4.parse_args([]).only, "entra en el --only por defecto")
+        self.assertEqual(e2e_h4.parse_args(["--only", "consumo"]).only, ["consumo"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as ctx:
+            e2e_h4.parse_args(["--help"])
+        self.assertEqual(ctx.exception.code, 0)
+        help_text = re.sub(r"\s+", " ", out.getvalue())
+        self.assertRegex(help_text, r"separadas por comas: [^()]*\bconsumo\b[^()]* \(todas\)", "la ayuda de --only")
+        doc = e2e_h4.__doc__ or ""
+        self.assertRegex(doc, r"\n  16\.\s+Consumo de la plataforma \(Fase 2, grupo «consumo», `dev/e2e_consumo.py`\)")
+        self.assertIn("16.0", doc)
+
+    def test_usage_timeout_help_names_both_groups_that_use_it(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            e2e_h4.parse_args(["--help"])
+        help_text = re.sub(r"\s+", " ", out.getvalue())
+        match = re.search(r"--usage-timeout \S+ (.*?) --overhead-n", help_text)
+        self.assertIsNotNone(match, help_text)
+        text = match.group(1) if match else ""
+        for fragment in ("uso", "consumo", "12.5", "16.2"):
+            self.assertIn(fragment, text, "16.2 espera la foto de disco con --usage-timeout: no es solo del grupo uso")
 
     def test_invalid_choice_exits_two(self) -> None:
         bad_limits = (["--auth-fail-burst", "0"], ["--auth-fail-per-minute", "0"], ["--auth-fail-per-minute", "-1"])
@@ -1256,9 +1295,10 @@ class MissingInspectorTest(unittest.TestCase):
 
 # La pila simulada no simula la observabilidad de uso (Fase 4): el grupo «uso» se prueba contra la pila real y aquí
 # solo sus utilidades (tests/test_e2e_uso.py); lo mismo con «acl»
-# (tests/test_e2e_acl.py), y con «catalogo» (tests/test_e2e_catalogo.py). Sin `--only`, el recorrido es el de los
-# grupos de H4.
-H4_GROUPS = ",".join(g for g in e2e_h4.GROUPS if g not in ("uso", "catalogo", "acl"))
+# (tests/test_e2e_acl.py), con «consumo» (tests/test_e2e_consumo.py; la pila simulada sirve el informe de turnos por
+# modo de 16.0, 16.1 y 16.4, no el disco de 16.2 ni el CSV de 16.3), con «ner» (tests/test_e2e_ner.py, sin NER en la
+# pila simulada) y con «catalogo» (tests/test_e2e_catalogo.py). Sin `--only`, el recorrido es el de los grupos de H4.
+H4_GROUPS = ",".join(g for g in e2e_h4.GROUPS if g not in ("uso", "acl", "consumo", "ner", "catalogo"))
 
 
 def run_e2e(
@@ -1573,6 +1613,205 @@ class FullRunTest(unittest.TestCase):
         self.assertEqual(tested, set(fake_h4_stack.FAULTS), "cada fallo inyectable debe tener su test")
 
 
+class ConsumoRunTest(unittest.TestCase):
+    """Grupo «consumo» (16.x) contra la pila simulada: 16.0, 16.1 y 16.4 a 16.8. El disco de 16.2 y el CSV de 16.3 solo
+    se prueban contra la pila real (sus utilidades, en `tests/test_e2e_consumo.py`)."""
+
+    SEEDS: ClassVar[list[str]] = ["baas-ai-ip", "demo", "observacion", "privada"]
+    SIMULATED: ClassVar[tuple[str, ...]] = ("16.0", "16.1", "16.4", "16.5", "16.6", "16.7", "16.8")
+
+    @staticmethod
+    def step(steps: dict[str, dict], prefix: str) -> dict:
+        (found,) = (s for n, s in steps.items() if n.startswith(prefix))
+        return found
+
+    def test_consumo_step_16_1_counts_match_sent_turns(self) -> None:
+        served: list[tuple[str, str]] = []  # (organización, modo) de cada turno que el proxy simulado sirvió
+        original = fake_h4_stack.StackState._record
+
+        def record(state: fake_h4_stack.StackState, conv: fake_h4_stack.Conv, mode: str, *args: object) -> None:
+            served.append((conv.org, mode))
+            original(state, conv, mode, *args)  # type: ignore[arg-type]
+
+        with (
+            fake_h4_stack.FakeH4Stack() as stack,
+            mock.patch.object(fake_h4_stack.StackState, "_record", record),
+        ):
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+        step = self.step(steps, "16.1")
+        self.assertEqual(step["status"], "OK", step["detail"])
+        ours = [mode for org, mode in served if org.startswith("consumo-") and org.endswith("-modos")]
+        counts = {m: ours.count(k) for m, k in (("ANONYMIZED", "anonymize"), ("OBSERVATION", "observe"),
+                                                ("BYPASS", "bypass"))}  # fmt: skip
+        self.assertEqual(len(set(counts.values())), 3, f"cada modo con una cifra distinta: {counts}")
+        self.assertTrue(all(counts.values()), f"los tres modos se envían: {counts}")
+        for mode, n in counts.items():
+            self.assertIn(f"{mode} {n}", step["detail"], "el paso dice cuántos turnos comparó por modo")
+        self.assertIn(f"{sum(counts.values())} turnos", step["detail"])
+
+    def test_the_steps_the_simulated_stack_serves_pass_and_leave_nothing_behind(self) -> None:
+        with fake_h4_stack.FakeH4Stack() as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+            leftovers = sorted(stack.state.orgs)
+        for prefix in self.SIMULATED:
+            step = self.step(steps, prefix)
+            self.assertEqual(step["status"], "OK", f"{prefix}: {step['detail']}")
+        self.assertEqual(leftovers, self.SEEDS, "las organizaciones de cada paso se eliminan, también si el paso falla")
+
+    def test_consumo_steps_16_5_to_16_8_are_registered(self) -> None:
+        with fake_h4_stack.FakeH4Stack() as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+        names = [n for n in steps if n.startswith("16.")]
+        self.assertEqual([n.split(" ")[0] for n in names], [f"16.{i}" for i in range(9)], "en orden, del 16.0 al 16.8")
+        for prefix, words in (
+            ("16.5", ("global", "suma")),
+            ("16.6", ("anonimizador", "plataforma")),
+            ("16.7", ("usage.viewed",)),
+            ("16.8", ("L2", "NER")),
+        ):
+            name = self.step(steps, prefix)["name"].lower()
+            for word in words:
+                self.assertIn(word.lower(), name, f"{prefix}: el nombre dice de qué va")
+
+    def test_16_5_compares_each_organisation_with_its_own_report(self) -> None:
+        with fake_h4_stack.FakeH4Stack() as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+        step = self.step(steps, "16.5")
+        self.assertEqual(step["status"], "OK", step["detail"])
+        for fragment in ("3 y 5", "group_by=org", "day", "org_day", "UTC"):
+            self.assertIn(fragment, step["detail"])
+
+    def test_16_6_compares_the_anonymizer_of_the_organisation_with_the_platform(self) -> None:
+        with fake_h4_stack.FakeH4Stack() as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+        step = self.step(steps, "16.6")
+        self.assertEqual(step["status"], "OK", step["detail"])
+        for fragment in ("ANONYMIZED 3", "OBSERVATION 2", "BYPASS 1", "200", "403", "404", "401"):
+            self.assertIn(fragment, step["detail"])
+
+    def test_step_16_7_fails_if_usage_viewed_is_written(self) -> None:
+        with fake_h4_stack.FakeH4Stack(faults={"consumo-viewed-written"}) as stack:
+            code, steps, out = run_e2e(stack, "--only", "consumo", inspector=None)
+            leftovers = sorted(stack.state.orgs)
+        self.assertEqual(code, 1, out)
+        step = self.step(steps, "16.7")
+        self.assertEqual(step["status"], "FALLO")
+        self.assertIn("usage.viewed", step["detail"])
+        self.assertEqual(leftovers, self.SEEDS, "también falla limpiando su organización")
+
+    def test_step_16_7_passes_and_proves_the_audit_can_show_the_row(self) -> None:
+        with fake_h4_stack.FakeH4Stack() as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+            rows = [r for r in stack.state.audit if r["action"] == "usage.viewed"]
+        step = self.step(steps, "16.7")
+        self.assertEqual(step["status"], "OK", step["detail"])
+        self.assertEqual(len(rows), 1, "solo el control positivo (detalle por persona) deja una fila")
+        self.assertEqual((rows[0]["target_id"], rows[0]["metadata"]["group_by"]), ("traffic", "user"))
+        self.assertIn("control", step["detail"])
+
+    def test_16_8_is_skipped_with_a_message_when_the_stack_has_no_ner(self) -> None:
+        with fake_h4_stack.FakeH4Stack() as stack:
+            code, steps, out = run_e2e(stack, "--only", "consumo", inspector=None)
+            leftovers = sorted(stack.state.orgs)
+        step = self.step(steps, "16.8")
+        self.assertEqual(step["status"], "OK", "saltar por no haber NER no es un fallo: la CI sin NER sigue en verde")
+        for fragment in ("SALTADO", "NER", "verification.l2"):
+            self.assertIn(fragment, step["detail"])
+        self.assertTrue(step["detail"].startswith("SALTADO"), step["detail"])
+        self.assertEqual(leftovers, self.SEEDS)
+        self.assertEqual(code, 1, "(16.2 y 16.3 no se simulan: el código es el de esos pasos)")
+        failed = out.strip().splitlines()[-1]
+        self.assertNotIn("16.8", failed, "el paso saltado no figura entre los que no tuvieron éxito")
+
+    def test_16_8_skip_says_how_to_declare_the_ner(self) -> None:
+        with fake_h4_stack.FakeH4Stack() as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+        detail = self.step(steps, "16.8")["detail"]
+        self.assertIn("--ner", detail)
+        self.assertIn("BAAS_E2E_NER", detail)
+
+    def test_16_8_fails_when_the_ner_is_declared_and_no_turn_carries_l2(self) -> None:
+        """Con `--ner` ya no se salta: un NER desplegado que dejara de emitir `l2` sería un falso verde."""
+        with fake_h4_stack.FakeH4Stack() as stack:  # una pila sin NER, declarada con NER
+            code, steps, out = run_e2e(stack, "--only", "consumo", "--ner", inspector=None)
+            leftovers = sorted(stack.state.orgs)
+        step = self.step(steps, "16.8")
+        self.assertEqual(step["status"], "FALLO", step["detail"])
+        for fragment in ("--ner", "verification.l2", "NER", "regresión"):
+            self.assertIn(fragment, step["detail"])
+        self.assertNotIn("SALTADO", step["detail"])
+        self.assertEqual(code, 1, out)
+        self.assertEqual(leftovers, self.SEEDS, "también falla limpiando su organización")
+
+    def test_16_8_fails_with_the_environment_variable_too(self) -> None:
+        with (
+            fake_h4_stack.FakeH4Stack() as stack,
+            mock.patch.dict(os.environ, {"BAAS_E2E_NER": "1"}),
+        ):
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+        step = self.step(steps, "16.8")
+        self.assertEqual(step["status"], "FALLO", step["detail"])
+        self.assertIn("BAAS_E2E_NER", step["detail"])
+
+    def test_16_8_still_skips_when_the_environment_variable_is_not_a_yes(self) -> None:
+        for value in ("", "0", "no"):
+            with self.subTest(value=value):
+                with (
+                    fake_h4_stack.FakeH4Stack() as stack,
+                    mock.patch.dict(os.environ, {"BAAS_E2E_NER": value}),
+                ):
+                    _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+                step = self.step(steps, "16.8")
+                self.assertEqual(step["status"], "OK", step["detail"])
+                self.assertTrue(step["detail"].startswith("SALTADO"), step["detail"])
+
+    def test_16_8_checks_the_columns_with_the_ner_declared_and_present(self) -> None:
+        with fake_h4_stack.FakeH4Stack(ner=True) as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", "--ner", inspector=None)
+        step = self.step(steps, "16.8")
+        self.assertEqual(step["status"], "OK", step["detail"])
+        self.assertFalse(step["detail"].startswith("SALTADO"))
+        self.assertIn("l2_turns 3", step["detail"])
+
+    def test_16_8_with_the_ner_declared_still_catches_empty_l2_columns(self) -> None:
+        with fake_h4_stack.FakeH4Stack(faults={"consumo-l2-empty"}) as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", "--ner", inspector=None)
+        step = self.step(steps, "16.8")
+        self.assertEqual(step["status"], "FALLO", step["detail"])
+        self.assertIn("l2_turns", step["detail"])
+
+    def test_16_8_fills_the_l2_columns_when_the_stack_has_the_ner(self) -> None:
+        with fake_h4_stack.FakeH4Stack(ner=True) as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+            leftovers = sorted(stack.state.orgs)
+        step = self.step(steps, "16.8")
+        self.assertEqual(step["status"], "OK", step["detail"])
+        self.assertFalse(step["detail"].startswith("SALTADO"), "con NER el paso comprueba, no salta")
+        for fragment in ("l2_turns 3", "l2_observed_turns", "plataforma", "organización"):
+            self.assertIn(fragment, step["detail"])
+        self.assertEqual(leftovers, self.SEEDS)
+
+    def test_the_other_steps_do_not_change_with_the_ner(self) -> None:
+        with fake_h4_stack.FakeH4Stack(ner=True) as stack:
+            _code, steps, _out = run_e2e(stack, "--only", "consumo", inspector=None)
+        for prefix in ("16.0", "16.1", "16.4", "16.5", "16.6", "16.7"):
+            step = self.step(steps, prefix)
+            self.assertEqual(step["status"], "OK", f"{prefix}: {step['detail']}")
+
+    def test_a_stack_without_the_report_fails_16_0_and_skips_the_rest(self) -> None:
+        with fake_h4_stack.FakeH4Stack(faults={"consumo-absent"}) as stack:
+            code, steps, out = run_e2e(stack, "--only", "consumo", inspector=None)
+        self.assertEqual(code, 1, out)
+        ready = self.step(steps, "16.0")
+        self.assertEqual(ready["status"], "FALLO")
+        for fragment in ("sin el informe de consumo", "period", "T2"):
+            self.assertIn(fragment, ready["detail"])
+        for prefix in ("16.1", "16.2", "16.3", "16.4", "16.5", "16.6", "16.7", "16.8"):
+            step = self.step(steps, prefix)
+            self.assertEqual(step["status"], "SALTADO", prefix)
+            self.assertIn("16.0", step["detail"], "dice de qué depende")
+
+
 class FaultsTest(unittest.TestCase):
     """Cada fallo inyectado en la pila simulada hace fallar el paso que lo comprueba (código 1)."""
 
@@ -1659,12 +1898,27 @@ class FaultsTest(unittest.TestCase):
         "limit-global": {"14.4": ("HTTP 429", "otra IP")},
         "limit-no-retry-after": {"14.1": ("Retry-After = None",), "14.3": ("Retry-After = None",)},
         "limit-shape": {"14.1": ("baas_auth_rate_limited", "rate_limit_error")},
+        "consumo-absent": {"16.0": ("sin el informe de consumo", "period")},
+        "consumo-mode-wrong": {"16.1": ("turns_by_mode", "OBSERVATION")},
+        "consumo-global-open": {"16.4": ("HTTP 200", "se esperaba 403", "/platform/usage/")},
+        "consumo-global-wrong": {"16.5": ("requests", "en el tráfico global")},
+        "consumo-anonymizer-wrong": {"16.6": ("turns_by_mode", "OBSERVATION")},
+        "consumo-anonymizer-open": {"16.6": ("HTTP 200", "se esperaba 403")},
+        "consumo-viewed-written": {"16.7": ("usage.viewed",)},
+        "consumo-l2-empty": {"16.8": ("l2_turns", "se llenan")},
     }
 
     ORPHAN_PREFIXES = ("preview-", "orphans-", "reactivate-", "disabled-")  # solo los pasos 11 los comprueban
 
     def run_fault(self, fault: str) -> dict[str, dict]:
         only = ("--only", "huerfanos") if fault.startswith(self.ORPHAN_PREFIXES) else ()
+        if fault.startswith(
+            "consumo-"
+        ):  # solo los pasos 16 (la pila simulada no tiene el disco ni el CSV: 16.2 y 16.3)
+            with fake_h4_stack.FakeH4Stack(faults={fault}) as stack:
+                code, steps, out = run_e2e(stack, "--only", "consumo", inspector=None)
+            self.assertEqual(code, 1, f"{fault}: {out}")
+            return steps
         if fault.startswith("limit-"):  # solo los pasos 14 (con el inspector de la pila simulada)
             with fake_h4_stack.FakeH4Stack(faults={fault}) as stack:
                 code, steps, out = run_e2e(stack, "--only", "limite")

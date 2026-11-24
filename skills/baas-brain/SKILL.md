@@ -34,7 +34,7 @@ Una skill de la organización puede llegarte de dos formas:
 | Cómo se invoca | `/<organización>:<skill>` (la lista de skills de Claude Code la muestra con ese prefijo) | `/mcp__baas__<skill>` o `baas_get_skill` |
 | Dónde está | Copia en `~/.claude/skills/<organización>/`, activa solo en los proyectos vinculados a esa organización | En el servidor; llega como texto |
 | Ficheros hermanos | Sí: `scripts/`, plantillas y contexto junto a la skill (`${CLAUDE_SKILL_DIR}`), con carga progresiva | Solo si los pides (`baas_get_skill_files`) o los ejecutas con el ejecutor |
-| Se actualiza | Con `/baas-sync` y solos, al iniciar y cerrar la sesión; un cambio se ve al reiniciar o con `/reload-plugins` | Siempre la versión actual |
+| Se actualiza | Con `/baas-sync` y solos, al iniciar y cerrar la sesión; un cambio se ve al reiniciar Claude Code (`/reload-plugins` no siempre basta) | Siempre la versión actual |
 
 - **Prefiere la sincronizada**: si `/<organización>:<skill>` existe, úsala en lugar de `baas_get_skill`. Si no existe y el usuario la espera, propón `/baas-sync` (y `/baas-status` para ver qué está desfasado).
 - Los scripts de una skill sincronizada **ya están en el equipo**, con su bit de ejecución: ejecútalos desde su carpeta (`${CLAUDE_SKILL_DIR}/scripts/…`) como indique la skill; no uses el ejecutor para ellos.

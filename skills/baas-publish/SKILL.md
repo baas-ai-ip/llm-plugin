@@ -3,7 +3,7 @@ name: baas-publish
 description: Guía la publicación de una skill (con sus scripts, plantillas y conocimiento) en el MCP de la organización de BaaS-AI-IP. Pregunta qué ruta subir, qué scripts son dependencia, de qué otras skills depende, de dónde sale el conocimiento y qué roles la verán; muestra el plan, ensaya con dry-run y publica en un solo lote verificado. Úsala solo cuando el usuario lance /baas-publish o pida subir, publicar o centralizar una skill en el MCP.
 argument-hint: "[ruta de la skill]"
 disable-model-invocation: true
-allowed-tools: Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" inspect *) Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" publish * --dry-run) mcp__baas__baas_whoami mcp__baas__baas_list_skills mcp__baas__baas_get_skill_package mcp__baas__baas_list_files mcp__baas__baas_search_knowledge
+allowed-tools: Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" inspect *) Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" publish * --dry-run) Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" sync *) mcp__baas__baas_whoami mcp__baas__baas_list_skills mcp__baas__baas_get_skill_package mcp__baas__baas_list_files mcp__baas__baas_search_knowledge
 ---
 
 # /baas-publish
@@ -39,7 +39,7 @@ Llama a `baas_whoami`. Si `organization.is_admin` no es verdadero, dile que no p
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" publish <ruta> --project "${CLAUDE_PROJECT_DIR}" --roles <R> --include-scripts <S> --knowledge <DIR:PREFIJO> --dry-run
    ```
 
-10. **Publicar y verificar.** Solo con su sí, repite el mismo comando cambiando `--dry-run` por `--yes`. Se escribe en **un lote atómico** y se comprueba cada hash. Cuéntale el resultado y que sus compañeros la reciben con `/baas-sync` (se invoca `/<organización>:<skill>`; hay que recargar los plugins o reiniciar).
+10. **Publicar y verificar.** Solo con su sí, repite el mismo comando cambiando `--dry-run` por `--yes`. Se escribe en **un lote atómico** y se comprueba cada hash. **Sincroniza enseguida para quien publica**: ejecuta `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/baas.py" sync --project "${CLAUDE_PROJECT_DIR}"` (activa el plugin de la organización en este proyecto). Cuéntale el resultado de la publicación y de la sincronización, y que sus compañeros la reciben con `/baas-sync` (se invoca `/<organización>:<skill>`). Dile que ahora debe **cerrar y volver a abrir Claude Code** (obligatorio; no puedes hacerlo tú, y `/reload-plugins` no basta si el plugin es nuevo). Los comandos `/mcp__baas_<skill>` que ya ve son prompts del MCP, no las skills del plugin. Si publica desde otro proyecto, `/baas-sync` hay que ejecutarlo allí para activarlo.
 
 ## Si algo falla
 

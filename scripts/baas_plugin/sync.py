@@ -79,7 +79,10 @@ SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 STATE_FORMAT = 1
 KILL_SWITCH = "KILL_SWITCH_ACTIVE"
 NOT_FOR_YOU = ("AUTHORIZATION_DENIED", "NOT_FOUND")  # el servidor dice que ese recurso no es para este usuario
-RELOAD_HINT = "Ejecuta `/reload-plugins` o reinicia Claude Code para ver los cambios."
+RELOAD_HINT = (
+    "Cierra y vuelve a abrir Claude Code para ver los cambios "
+    "(`/reload-plugins` solo basta si el plugin ya estaba cargado)."
+)
 
 
 @dataclass

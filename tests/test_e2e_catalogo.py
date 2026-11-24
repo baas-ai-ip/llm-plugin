@@ -1,6 +1,6 @@
-"""Grupo «catalogo» (15.x) de la prueba de punta a punta de H4 (`dev/e2e_catalogo.py`).
+"""Grupo «catalogo» (17.x) de la prueba de punta a punta de H4 (`dev/e2e_catalogo.py`).
 
-Los pasos 15.0–15.10 se ejecutan contra la pila real; aquí se prueban las utilidades puras con las que deciden, para que
+Los pasos 17.0–17.10 se ejecutan contra la pila real; aquí se prueban las utilidades puras con las que deciden, para que
 un paso no pase por error (que no vea un cuerpo, que dé por buena una respuesta `200` de `/internal`). Con `unittest`.
 """
 
@@ -54,7 +54,7 @@ BIG_DOC = "knowledge-content/ventas/grande.txt"
 
 
 class FilesRouteTest(unittest.TestCase):
-    """15.7: lo único que puede llevar un cuerpo es la 200 de las dos rutas de contenido (ficheros de una skill y
+    """17.7: lo único que puede llevar un cuerpo es la 200 de las dos rutas de contenido (ficheros de una skill y
     documento de conocimiento)."""
 
     def test_only_the_200_of_the_two_routes_is_exempt(self) -> None:
@@ -319,6 +319,32 @@ class LeakTest(unittest.TestCase):
         self.assertEqual(len(paths), len(set(paths)))
 
 
+class OrgContextTest(unittest.TestCase):
+    """`UsoGroup.org()` llama a `create_org(label, members, name)`: la del catálogo tiene que aceptar los tres."""
+
+    def test_org_context_uses_the_catalogo_prefix_and_drops_the_org(self) -> None:
+        posts: list[tuple[str, object]] = []
+
+        class E2E:
+            args = type("A", (), {"internal_token": "t"})()
+            nonce = "n"
+
+            def admin_post(self, path: str, body: object, method: str = "POST") -> Http:
+                posts.append((path, body))
+                return reply(201, {"organization": {"id": "org-1", "timezone": "Europe/Madrid"}})
+
+        group = e2e_catalogo.CatalogoGroup(E2E())  # type: ignore[arg-type]
+        dropped: list[str] = []
+        group.add_members = lambda org, members: None  # type: ignore[method-assign]
+        group.drop_org = dropped.append  # type: ignore[method-assign]
+        with group.org("paso", {}) as org:
+            self.assertEqual(org.slug, "cat-n-paso")
+        self.assertEqual(dropped, ["cat-n-paso"])
+        self.assertEqual(posts[0][0], "/api/v1/orgs")
+        self.assertEqual(posts[0][1], {"slug": "cat-n-paso", "name": "E2E catalogo paso n"})
+        self.assertEqual([p for p, _ in posts[1:]], ["/api/v1/orgs/cat-n-paso/roles"] * 2)
+
+
 class WiringTest(unittest.TestCase):
     def test_group_is_selectable(self) -> None:
         self.assertIn("catalogo", e2e_h4.GROUPS)
@@ -339,7 +365,7 @@ class WiringTest(unittest.TestCase):
             nonce = "n"
 
         e2e_catalogo.CatalogoGroup(E2E()).register(Fake(), ["0"])  # type: ignore[arg-type]
-        self.assertEqual([n.split(" ")[0] for n in names], [f"15.{i}" for i in range(11)])
+        self.assertEqual([n.split(" ")[0] for n in names], [f"17.{i}" for i in range(11)])
 
 
 if __name__ == "__main__":
